@@ -1,0 +1,12 @@
+syntax = "proto3";
+
+package grading_mini.proto;
+
+message SpeedChecker {
+  double max_speed_threshold = 1;
+}
+
+message SpeedCheckerCustomInfo {
+  double current_speed = 1;
+  bool exceeded = 2;
+}

@@ -1,0 +1,17 @@
+syntax = "proto3";
+
+package grading_mini.proto;
+
+message VehicleState {
+  double x = 1;
+  double y = 2;
+  double heading = 3;
+  double speed = 4;
+  double acceleration = 5;
+}
+
+message MetricFrameInput {
+  int64 frame_id = 1;
+  int64 timestamp_us = 2;
+  VehicleState vehicle_state = 3;
+}

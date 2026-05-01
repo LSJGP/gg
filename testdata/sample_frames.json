@@ -1,0 +1,12 @@
+[
+  {"frame_id": 1, "timestamp_us": 1000000, "x": 100.0, "y": 200.0, "z": 0.0, "heading": 0.1, "speed": 15.0, "acceleration": 1.0},
+  {"frame_id": 2, "timestamp_us": 1100000, "x": 101.5, "y": 200.1, "z": 0.0, "heading": 0.1, "speed": 20.0, "acceleration": 0.5},
+  {"frame_id": 3, "timestamp_us": 1200000, "x": 103.5, "y": 200.2, "z": 0.0, "heading": 0.1, "speed": 28.0, "acceleration": 0.8},
+  {"frame_id": 4, "timestamp_us": 1300000, "x": 106.3, "y": 200.3, "z": 0.0, "heading": 0.1, "speed": 35.0, "acceleration": 0.7},
+  {"frame_id": 5, "timestamp_us": 1400000, "x": 109.8, "y": 200.3, "z": 0.0, "heading": 0.1, "speed": 40.0, "acceleration": 0.5},
+  {"frame_id": 6, "timestamp_us": 1500000, "x": 113.8, "y": 200.4, "z": 0.0, "heading": 0.1, "speed": 32.0, "acceleration": -0.8},
+  {"frame_id": 7, "timestamp_us": 1600000, "x": 117.0, "y": 200.4, "z": 0.0, "heading": 0.1, "speed": 25.0, "acceleration": -0.7},
+  {"frame_id": 8, "timestamp_us": 1700000, "x": 119.5, "y": 200.5, "z": 0.0, "heading": 0.1, "speed": 18.0, "acceleration": -0.7},
+  {"frame_id": 9, "timestamp_us": 1800000, "x": 121.3, "y": 200.5, "z": 0.0, "heading": 0.1, "speed": 12.0, "acceleration": -0.6},
+  {"frame_id": 10, "timestamp_us": 1900000, "x": 122.5, "y": 200.5, "z": 0.0, "heading": 0.1, "speed": 8.0, "acceleration": -0.4}
+]
