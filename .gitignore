@@ -10,9 +10,11 @@ sim/.venv/
 venv/
 ENV/
 
-grading_mini/bazel-bin/
-grading_mini/bazel-out/
-grading_mini/bazel-testlogs/
+# Bazel local symlinks (do not commit — everyone rebuilds locally)
+grading_mini/bazel-bin
+grading_mini/bazel-out
+grading_mini/bazel-testlogs
+grading_mini/bazel-grading_mini
 
 .env
 .env.local
