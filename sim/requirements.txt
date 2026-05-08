@@ -1,0 +1,8 @@
+# waymo_sim has zero hard third-party deps for the core loop; everything is
+# pure Python + stdlib. The list below covers optional helpers only.
+#
+# Required for converting Waymo TFRecords (used outside this directory):
+#   tensorflow
+#   waymo-open-dataset-tf-2-12-0
+#
+# The sim itself runs under Python 3.10+ with no external dependencies.

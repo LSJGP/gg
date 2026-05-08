@@ -1,0 +1,41 @@
+syntax = "proto3";
+
+package grading_mini.proto;
+
+message VehicleState {
+  double x = 1;
+  double y = 2;
+  double heading = 3;
+  double speed = 4;
+  double acceleration = 5;
+}
+
+message PlanningCommand {
+  double desired_speed_mps = 1;
+}
+
+// Ground-truth collision event emitted by the simulator (not the planner).
+// `kind` is one of:
+//   "ego_front_into_npc"  ego rear-ends / drives into NPC ahead
+//   "npc_rear_into_ego"   NPC rear-ends ego from behind
+//   "side_collision"      lateral overlap (cut-in, side-swipe, t-bone)
+// `exempt`/`exempt_reason` encode regulatory liability assignment.
+message CollisionEvent {
+  bool collided = 1;
+  int64 other_id = 2;
+  string kind = 3;
+  bool ego_at_fault = 4;
+  bool exempt = 5;
+  string exempt_reason = 6;
+  double relative_speed_mps = 7;
+  double ego_speed_mps = 8;
+  double approach_angle_deg = 9;
+}
+
+message MetricFrameInput {
+  int64 frame_id = 1;
+  int64 timestamp_us = 2;
+  VehicleState vehicle_state = 3;
+  optional PlanningCommand planning_command = 4;
+  optional CollisionEvent collision_event = 5;
+}

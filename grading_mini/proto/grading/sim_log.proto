@@ -1,0 +1,12 @@
+syntax = "proto3";
+
+package grading_mini.proto;
+
+import "proto/grading/metric_input.proto";
+
+// Simulation / planning loop export: ordered frames aligned with MetricFrameInput
+// so grading can consume the same shape the runtime uses.
+message SimLog {
+  string source = 1;
+  repeated MetricFrameInput frames = 2;
+}

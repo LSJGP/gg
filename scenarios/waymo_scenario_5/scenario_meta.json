@@ -1,0 +1,40 @@
+{
+  "source": "/home/gokousuika/cnm/grading/data/uncompressed_scenario_training_training.tfrecord-00000-of-01000",
+  "scenario_id": "c31a6a2a9c9fe373",
+  "scenario_index": 5,
+  "world_offset": {
+    "x": 7230.319016760687,
+    "y": 1467.7406058487945,
+    "z": -55.08624036537705
+  },
+  "init_pose": {
+    "x": 0.0,
+    "y": 0.0,
+    "yaw": -3.1355795860290527
+  },
+  "goal_pose": {
+    "x": -117.35588931208258,
+    "y": -1.9862993466181251,
+    "yaw": -3.106783866882324
+  },
+  "bbox": {
+    "xmin": -296.51243852861626,
+    "ymin": -100.70099593242902,
+    "xmax": 120.63811750892512,
+    "ymax": 102.03936219811159
+  },
+  "stats": {
+    "lanes": 464,
+    "road_lines": 58,
+    "road_edges": 97,
+    "crosswalks": 8,
+    "timestamps": 91,
+    "duration_s": 8.99948,
+    "current_time_index": 10,
+    "tracks_total": 44,
+    "tracks_non_sdc_by_type": {
+      "VEHICLE": 40,
+      "PEDESTRIAN": 3
+    }
+  }
+}
