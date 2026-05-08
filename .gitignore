@@ -1,0 +1,32 @@
+# Closed-loop sim artefacts (default --output under sim/)
+sim/output/
+
+# Python bytecode / cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Virtual environments (e.g. sim/.venv for numpy / frenet)
+sim/.venv/
+.venv/
+venv/
+ENV/
+
+# Bazel (grading_mini build symlinks; safe to ignore locally after bazel build)
+grading_mini/bazel-bin/
+grading_mini/bazel-out/
+grading_mini/bazel-testlogs/
+
+# Local env / secrets
+.env
+.env.local
+*.pem
+
+# IDE / OS
+.idea/
+.vscode/
+*.swp
+*~
+.DS_Store
+Thumbs.db
