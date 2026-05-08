@@ -4,15 +4,16 @@
 Reads a scenario directory produced by tools/waymo_to_lanelet2.py, builds a
 route through the lane graph, runs the chosen planner against the replayed NPC
 tracks (with OBB-based collision detection), and writes a SimLog JSON that the
-existing C++ grading_main can re-score offline. An in-process Python grader
-prints PASS/FAIL each frame.
+existing C++ grading_main can re-score offline. Optionally an in-process Python
+grader mirrors legacy metrics (`--no-python-grader` to disable; use C++ only).
 
 Example:
   python run_sim.py \\
       --scenario-dir ../scenarios/waymo_scenario_5 \\
       --planner idm_pure_pursuit \\
-      --output /tmp/sim_log.json \\
       --dt 0.1
+
+  (Default SimLog path: <sim>/output/sim_log.json — the output/ directory is created automatically.)
 """
 
 from __future__ import annotations
@@ -26,6 +27,8 @@ from pathlib import Path
 from typing import Optional
 
 THIS_DIR = Path(__file__).resolve().parent
+DEFAULT_OUTPUT_DIR = THIS_DIR / "output"
+DEFAULT_SIMLOG_PATH = DEFAULT_OUTPUT_DIR / "sim_log.json"
 if str(THIS_DIR) not in sys.path:
     sys.path.insert(0, str(THIS_DIR))
 
@@ -44,7 +47,11 @@ def _parse_args(argv) -> argparse.Namespace:
     )
     p.add_argument("--scenario-dir", required=True, help="Directory with scenario_meta/dynamic_objects/lane_graph json")
     p.add_argument("--planner", default="idm_pure_pursuit", choices=sorted(PLANNERS.keys()))
-    p.add_argument("--output", default="/tmp/sim_log.json", help="SimLog JSON output path")
+    p.add_argument(
+        "--output",
+        default=str(DEFAULT_SIMLOG_PATH),
+        help=f"SimLog JSON output path (default: {DEFAULT_SIMLOG_PATH})",
+    )
     p.add_argument("--source-tag", default="waymo_sim", help="`source` field embedded into SimLog")
     p.add_argument("--dt", type=float, default=0.1, help="Sim / control timestep in seconds")
     p.add_argument("--max-seconds", type=float, default=0.0, help="Override scenario duration (0 = use full duration)")
@@ -82,7 +89,16 @@ def _parse_args(argv) -> argparse.Namespace:
             "  online  : pipe frames to `grading_main --stream` live (default)\n"
             "  offline : run `grading_main <SimLog>` once after sim finishes (batch)\n"
             "  both    : online during sim AND offline batch at the end\n"
-            "  off     : skip the C++ scorer (Python online grader only)"
+            "  off     : skip the C++ scorer (Python grader if enabled, else SimLog only)"
+        ),
+    )
+    p.add_argument(
+        "--no-python-grader",
+        action="store_true",
+        help=(
+            "Do not run the in-process Python OnlineGrader. "
+            "Use with --grading-bin so Pass/Fail comes only from grading_main "
+            "(avoids duplicating new C++ metrics in Python)."
         ),
     )
 
@@ -158,9 +174,17 @@ def main(argv=None) -> int:
     planner_kwargs = {}
     if args.planner == "idm_pure_pursuit":
         from waymo_sim.planners.idm_pure_pursuit import IDMParams, PurePursuitParams
+
         planner_kwargs.update(
             idm=IDMParams(desired_speed=args.desired_speed),
             pp=PurePursuitParams(wheelbase=args.ego_wheelbase),
+        )
+    elif args.planner == "frenet_optimal":
+        planner_kwargs.update(
+            wheelbase=args.ego_wheelbase,
+            ego_length=args.ego_length,
+            ego_width=args.ego_width,
+            desired_speed_mps=min(args.desired_speed, speed_limit_mps),
         )
     planner = planner_cls(reference_path=ref_path, speed_limit_mps=speed_limit_mps, **planner_kwargs)
     print(f"[sim] planner = {planner.name}")
@@ -175,13 +199,25 @@ def main(argv=None) -> int:
     world = World(scenario=scenario, ego=ego, config=cfg)
 
     output_path = Path(args.output).expanduser().resolve()
-    grader = OnlineGrader(
-        max_speed_mps=args.ego_max_speed,
-        max_desired_speed_mps=args.ego_max_speed,
-        print_every=args.print_every,
-    )
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
     writer = SimLogWriter(output_path=output_path, source=args.source_tag)
-    hooks = [grader, writer]
+    grader: Optional[OnlineGrader] = None
+    hooks = []
+    if not args.no_python_grader:
+        grader = OnlineGrader(
+            max_speed_mps=args.ego_max_speed,
+            max_desired_speed_mps=args.ego_max_speed,
+            print_every=args.print_every,
+        )
+        hooks.append(grader)
+    hooks.append(writer)
+
+    if args.no_python_grader and not args.grading_bin:
+        print(
+            "[sim] note: --no-python-grader with no --grading-bin: only SimLog will be written.",
+            file=sys.stderr,
+        )
 
     cpp_online: Optional[CppOnlineGrader] = None
     bin_path: Optional[Path] = None
@@ -216,6 +252,9 @@ def main(argv=None) -> int:
             print(f"[sim] grading_main exited with code {proc.returncode}", file=sys.stderr)
             return proc.returncode
 
+    if args.no_python_grader:
+        return 0
+    assert grader is not None
     return 0 if grader.overall_passed else 10
 
 
