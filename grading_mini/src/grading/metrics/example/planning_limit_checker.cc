@@ -1,13 +1,21 @@
 #include "src/grading/metrics/example/planning_limit_checker.h"
 
+#include "proto/grading/metrics/example_metric.pb.h"
 #include "spdlog/spdlog.h"
 
 namespace grading_mini {
 
 REGISTER_METRIC(PlanningLimitChecker, "planning_limit_checker");
 
-absl::Status PlanningLimitChecker::Init(
-    const google::protobuf::Message* /*config*/) {
+absl::Status PlanningLimitChecker::Init(const google::protobuf::Message* config) {
+  if (config) {
+    if (const auto* typed =
+            dynamic_cast<const proto::PlanningLimitCheckerConfig*>(config)) {
+      if (typed->max_desired_speed_mps() > 0.0) {
+        max_speed_mps_ = typed->max_desired_speed_mps();
+      }
+    }
+  }
   SPDLOG_INFO("PlanningLimitChecker init: max_desired_speed={:.1f} m/s",
               max_speed_mps_);
   return absl::OkStatus();

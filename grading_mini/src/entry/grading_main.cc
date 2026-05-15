@@ -1,15 +1,21 @@
 #include <cctype>
 #include <fstream>
 #include <iostream>
+#include <memory>
 #include <sstream>
 #include <string>
 #include <vector>
 
+#include "absl/status/status.h"
+#include "absl/strings/str_cat.h"
+#include "google/protobuf/message.h"
 #include "google/protobuf/util/json_util.h"
 #include "spdlog/spdlog.h"
 
+#include "proto/grading/grading_run_config.pb.h"
 #include "proto/grading/metric_input.pb.h"
 #include "proto/grading/metric_output.pb.h"
+#include "proto/grading/metrics/example_metric.pb.h"
 #include "proto/grading/sim_log.pb.h"
 #include "src/grading/grader.h"
 #include "src/planning/simple_planner.h"
@@ -162,23 +168,126 @@ bool WriteReport(const grading_mini::proto::GradingReport& report,
   return true;
 }
 
-}  // namespace
+void ApplySpdlogLevel(const std::string& raw) {
+  if (raw.empty()) return;
+  std::string level = raw;
+  for (auto& c : level) {
+    c = static_cast<char>(::tolower(static_cast<unsigned char>(c)));
+  }
+  if (level == "off") {
+    spdlog::set_level(spdlog::level::off);
+    return;
+  }
+  spdlog::level::level_enum e = spdlog::level::info;
+  if (level == "trace") e = spdlog::level::trace;
+  else if (level == "debug") e = spdlog::level::debug;
+  else if (level == "info") e = spdlog::level::info;
+  else if (level == "warn" || level == "warning") e = spdlog::level::warn;
+  else if (level == "error") e = spdlog::level::err;
+  else if (level == "critical") e = spdlog::level::critical;
+  spdlog::set_level(e);
+}
 
-namespace {
+grading_mini::proto::GradingRunConfig DefaultRunConfig() {
+  grading_mini::proto::GradingRunConfig c;
+  c.set_simple_planner_max_speed_mps(33.3);
+  c.add_metrics()->set_name("planning_limit_checker");
+  c.add_metrics()->set_name("speed_checker");
+  c.add_metrics()->set_name("regulatory_collision_checker");
+  return c;
+}
+
+bool LoadGradingRunConfigJson(const std::string& path,
+                             grading_mini::proto::GradingRunConfig* out,
+                             std::string* err) {
+  const std::string raw = ReadWholeFile(path);
+  if (raw.empty()) {
+    if (err) *err = "cannot read metrics config: " + path;
+    return false;
+  }
+  const std::string content = TrimCopy(raw);
+  google::protobuf::util::JsonParseOptions jopts;
+  jopts.ignore_unknown_fields = true;
+  const auto st =
+      google::protobuf::util::JsonStringToMessage(content, out, jopts);
+  if (!st.ok()) {
+    if (err) *err = std::string(st.message());
+    return false;
+  }
+  return true;
+}
+
+absl::Status BuildMetricInitSpecs(
+    const grading_mini::proto::GradingRunConfig& cfg,
+    std::vector<grading_mini::MetricInitSpec>* specs,
+    std::vector<std::unique_ptr<google::protobuf::Message>>* owned) {
+  specs->clear();
+  owned->clear();
+  if (cfg.metrics().empty()) {
+    return absl::InvalidArgumentError("GradingRunConfig.metrics is empty");
+  }
+  google::protobuf::util::JsonParseOptions jopts;
+  jopts.ignore_unknown_fields = true;
+  for (const auto& m : cfg.metrics()) {
+    const std::string& n = m.name();
+    if (n.empty()) {
+      return absl::InvalidArgumentError("metric name is empty");
+    }
+    if (n == "speed_checker") {
+      auto pb = std::make_unique<grading_mini::proto::SpeedChecker>();
+      if (!m.params_json().empty()) {
+        const auto pst = google::protobuf::util::JsonStringToMessage(
+            m.params_json(), pb.get(), jopts);
+        if (!pst.ok()) {
+          return absl::InvalidArgumentError(absl::StrCat(
+              "speed_checker params_json: ", std::string(pst.message())));
+        }
+      }
+      owned->push_back(std::move(pb));
+      specs->push_back({n, owned->back().get()});
+    } else if (n == "planning_limit_checker") {
+      auto pb = std::make_unique<grading_mini::proto::PlanningLimitCheckerConfig>();
+      if (!m.params_json().empty()) {
+        const auto pst = google::protobuf::util::JsonStringToMessage(
+            m.params_json(), pb.get(), jopts);
+        if (!pst.ok()) {
+          return absl::InvalidArgumentError(absl::StrCat(
+              "planning_limit_checker params_json: ", std::string(pst.message())));
+        }
+      }
+      owned->push_back(std::move(pb));
+      specs->push_back({n, owned->back().get()});
+    } else if (n == "regulatory_collision_checker") {
+      if (!m.params_json().empty()) {
+        SPDLOG_WARN(
+            "regulatory_collision_checker: params_json is ignored for now");
+      }
+      specs->push_back({n, nullptr});
+    } else {
+      return absl::InvalidArgumentError(absl::StrCat(
+          "Unknown metric name: ", n,
+          " (supported: planning_limit_checker, speed_checker, "
+          "regulatory_collision_checker)"));
+    }
+  }
+  return absl::OkStatus();
+}
 
 void PrintUsage(const char* argv0) {
   std::cerr
       << "Usage:\n"
-      << "  " << argv0 << " <input.pb|input.json> [output.json]\n"
-      << "      Batch mode. Reads the whole SimLog (binary .pb / JSON / legacy\n"
-      << "      array), grades it, writes a GradingReport JSON.\n"
-      << "  " << argv0 << " --stream [output.json]\n"
-      << "      Online mode. Reads one MetricFrameInput JSON per line from\n"
-      << "      stdin, prints a per-frame tick to stdout, and writes the\n"
-      << "      GradingReport JSON when stdin closes.\n";
+      << "  " << argv0
+      << " [--metrics-config <grading_metrics.json>] <input.pb|input.json> "
+         "[output.json]\n"
+      << "      Batch mode. Reads the whole SimLog, grades it, writes report.\n"
+      << "  " << argv0
+      << " --stream [--metrics-config <grading_metrics.json>] [output.json]\n"
+      << "      Online mode. One MetricFrameInput JSON per line on stdin.\n"
+      << "      Without --metrics-config, uses built-in default metrics.\n";
 }
 
-bool RunBatch(const std::string& input_path, const std::string& output_path) {
+bool RunBatch(const std::string& input_path, const std::string& output_path,
+              const grading_mini::proto::GradingRunConfig& run_cfg) {
   std::string sim_source;
   std::vector<grading_mini::proto::MetricFrameInput> inputs;
   if (!LoadMetricInputs(input_path, &inputs, &sim_source)) {
@@ -191,13 +300,20 @@ bool RunBatch(const std::string& input_path, const std::string& output_path) {
     SPDLOG_INFO("Loaded {} frames", inputs.size());
   }
 
-  grading_mini::SimplePlanner planner(33.3);
+  std::vector<std::unique_ptr<google::protobuf::Message>> owned_configs;
+  std::vector<grading_mini::MetricInitSpec> specs;
+  const auto bst = BuildMetricInitSpecs(run_cfg, &specs, &owned_configs);
+  if (!bst.ok()) {
+    SPDLOG_ERROR("metric config: {}", std::string(bst.message()));
+    return false;
+  }
+
+  const double planner_max = run_cfg.simple_planner_max_speed_mps() > 0.0
+                                 ? run_cfg.simple_planner_max_speed_mps()
+                                 : 33.3;
+  grading_mini::SimplePlanner planner(planner_max);
   grading_mini::Grader grader;
-  auto status = grader.Init({
-      "planning_limit_checker",
-      "speed_checker",
-      "regulatory_collision_checker",
-  });
+  auto status = grader.Init(specs);
   if (!status.ok()) {
     SPDLOG_ERROR("Init failed: {}", std::string(status.message()));
     return false;
@@ -235,18 +351,26 @@ bool RunBatch(const std::string& input_path, const std::string& output_path) {
   return true;
 }
 
-bool RunStream(const std::string& output_path) {
+bool RunStream(const std::string& output_path,
+               const grading_mini::proto::GradingRunConfig& run_cfg) {
   // Line-buffer stdout so the producer side can reliably read tick lines as
   // soon as we emit them (subprocess piping uses block-buffering by default).
   std::setvbuf(stdout, nullptr, _IOLBF, 0);
 
-  grading_mini::SimplePlanner planner(33.3);
+  std::vector<std::unique_ptr<google::protobuf::Message>> owned_configs;
+  std::vector<grading_mini::MetricInitSpec> specs;
+  const auto bst = BuildMetricInitSpecs(run_cfg, &specs, &owned_configs);
+  if (!bst.ok()) {
+    SPDLOG_ERROR("metric config: {}", std::string(bst.message()));
+    return false;
+  }
+
+  const double planner_max = run_cfg.simple_planner_max_speed_mps() > 0.0
+                                 ? run_cfg.simple_planner_max_speed_mps()
+                                 : 33.3;
+  grading_mini::SimplePlanner planner(planner_max);
   grading_mini::Grader grader;
-  auto status = grader.Init({
-      "planning_limit_checker",
-      "speed_checker",
-      "regulatory_collision_checker",
-  });
+  auto status = grader.Init(specs);
   if (!status.ok()) {
     SPDLOG_ERROR("Init failed: {}", std::string(status.message()));
     return false;
@@ -315,25 +439,91 @@ bool RunStream(const std::string& output_path) {
   return true;
 }
 
+struct GradingCli {
+  bool stream_mode = false;
+  bool want_help = false;
+  std::string metrics_config;
+  std::vector<std::string> positional;
+};
+
+bool ParseGradingCli(int argc, char** argv, GradingCli* cli, std::string* err) {
+  for (int i = 1; i < argc; ++i) {
+    const std::string a = argv[i];
+    if (a == "--stream") {
+      cli->stream_mode = true;
+      continue;
+    }
+    if (a == "--metrics-config") {
+      if (i + 1 >= argc) {
+        if (err) *err = "--metrics-config requires a file path";
+        return false;
+      }
+      cli->metrics_config = argv[++i];
+      continue;
+    }
+    if (a == "-h" || a == "--help") {
+      cli->want_help = true;
+      continue;
+    }
+    if (a.rfind("--", 0) == 0) {
+      if (err) *err = "unknown flag: " + a;
+      return false;
+    }
+    cli->positional.push_back(a);
+  }
+  return true;
+}
+
 }  // namespace
 
-int main(int argc, char* argv[]) {
-  if (argc < 2) {
+int main(int argc, char** argv) {
+  GradingCli cli;
+  std::string perr;
+  if (!ParseGradingCli(argc, argv, &cli, &perr)) {
+    std::cerr << "[grading_main] " << perr << "\n";
     PrintUsage(argv[0]);
     return 1;
   }
-
-  std::string arg1 = argv[1];
-  if (arg1 == "--stream") {
-    std::string output_path =
-        (argc > 2) ? argv[2] : "/tmp/grading_output.json";
-    return RunStream(output_path) ? 0 : 1;
-  }
-  if (arg1 == "-h" || arg1 == "--help") {
+  if (cli.want_help) {
     PrintUsage(argv[0]);
     return 0;
   }
 
-  std::string output_path = (argc > 2) ? argv[2] : "/tmp/grading_output.json";
-  return RunBatch(arg1, output_path) ? 0 : 1;
+  grading_mini::proto::GradingRunConfig run_cfg;
+  if (!cli.metrics_config.empty()) {
+    std::string err;
+    if (!LoadGradingRunConfigJson(cli.metrics_config, &run_cfg, &err)) {
+      std::cerr << "[grading_main] " << err << "\n";
+      return 1;
+    }
+  } else {
+    run_cfg = DefaultRunConfig();
+  }
+  ApplySpdlogLevel(run_cfg.spdlog_level());
+
+  if (cli.stream_mode) {
+    const std::string out = cli.positional.empty()
+                                ? "/tmp/grading_output.json"
+                                : cli.positional[0];
+    if (cli.positional.size() > 1) {
+      std::cerr << "[grading_main] too many arguments for --stream mode\n";
+      PrintUsage(argv[0]);
+      return 1;
+    }
+    return RunStream(out, run_cfg) ? 0 : 1;
+  }
+
+  if (cli.positional.empty()) {
+    PrintUsage(argv[0]);
+    return 1;
+  }
+  const std::string& in = cli.positional[0];
+  const std::string out = cli.positional.size() > 1 ? cli.positional[1]
+                                                    : "/tmp/grading_output.json";
+  if (cli.positional.size() > 2) {
+    std::cerr << "[grading_main] too many positional arguments\n";
+    PrintUsage(argv[0]);
+    return 1;
+  }
+  return RunBatch(in, out, run_cfg) ? 0 : 1;
 }

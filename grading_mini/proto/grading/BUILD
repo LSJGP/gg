@@ -37,3 +37,15 @@ cc_proto_library(
     deps = [":sim_log_proto"],
     visibility = ["//visibility:public"],
 )
+
+proto_library(
+    name = "grading_run_config_proto",
+    srcs = ["grading_run_config.proto"],
+    visibility = ["//visibility:public"],
+)
+
+cc_proto_library(
+    name = "grading_run_config_cc_proto",
+    deps = [":grading_run_config_proto"],
+    visibility = ["//visibility:public"],
+)

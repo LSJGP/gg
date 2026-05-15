@@ -1,0 +1,3 @@
+build --enable_bzlmod=false
+build --cxxopt=-std=c++17
+build --spawn_strategy=local

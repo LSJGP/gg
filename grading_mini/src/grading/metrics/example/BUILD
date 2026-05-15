@@ -6,6 +6,7 @@ cc_library(
     hdrs = ["planning_limit_checker.h"],
     visibility = ["//visibility:public"],
     deps = [
+        "//proto/grading/metrics:example_metric_cc_proto",
         "//src/grading:metric_base",
         "//src/grading:metric_register",
         "@com_google_absl//absl/status",

@@ -1,0 +1,17 @@
+{
+  "simplePlannerMaxSpeedMps": 33.3,
+  "spdlogLevel": "info",
+  "metrics": [
+    {
+      "name": "planning_limit_checker",
+      "paramsJson": "{\"maxDesiredSpeedMps\": 33.3}"
+    },
+    {
+      "name": "speed_checker",
+      "paramsJson": "{\"maxSpeedThreshold\": 33.3}"
+    },
+    {
+      "name": "regulatory_collision_checker"
+    }
+  ]
+}

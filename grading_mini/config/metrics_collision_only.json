@@ -1,0 +1,4 @@
+{
+  "simplePlannerMaxSpeedMps": 33.3,
+  "metrics": [{ "name": "regulatory_collision_checker" }]
+}

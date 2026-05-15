@@ -1,5 +1,8 @@
 sim/output/
 
+# Default sim + grading outputs at repo root (regenerated on each run)
+/output/
+
 __pycache__/
 *.py[cod]
 *$py.class

@@ -1,0 +1,18 @@
+syntax = "proto3";
+
+package grading_mini.proto;
+
+// One metric to instantiate. Optional params_json is a JSON object string
+// parsed per metric type (e.g. SpeedChecker, PlanningLimitCheckerConfig).
+message MetricInstance {
+  string name = 1;
+  string params_json = 2;
+}
+
+// Loaded from JSON to configure SimplePlanner + which metrics run and how.
+message GradingRunConfig {
+  double simple_planner_max_speed_mps = 1;
+  repeated MetricInstance metrics = 2;
+  // Optional: spdlog level for grading_main (trace|debug|info|warn|error|off).
+  string spdlog_level = 3;
+}
