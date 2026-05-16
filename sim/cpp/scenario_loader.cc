@@ -9,19 +9,21 @@ namespace hyw_sim {
 namespace fs = std::filesystem;
 namespace {
 
-Pose2D ParsePose(const google::protobuf::Struct* pose) {
+Pose2D ParsePose(const google::protobuf::Struct *pose) {
   Pose2D out;
-  if (!pose) return out;
+  if (!pose)
+    return out;
   out.x = GetFieldNumber(*pose, "x", 0.0);
   out.y = GetFieldNumber(*pose, "y", 0.0);
   out.yaw = GetFieldNumber(*pose, "yaw", 0.0);
   return out;
 }
 
-TrackState ParseTrackState(const google::protobuf::Struct& st) {
+TrackState ParseTrackState(const google::protobuf::Struct &st) {
   TrackState out;
   out.valid = GetFieldBool(st, "valid", false);
-  if (!out.valid) return out;
+  if (!out.valid)
+    return out;
   out.x = GetFieldNumber(st, "x", 0.0);
   out.y = GetFieldNumber(st, "y", 0.0);
   out.z = GetFieldNumber(st, "z", 0.0);
@@ -34,10 +36,10 @@ TrackState ParseTrackState(const google::protobuf::Struct& st) {
   return out;
 }
 
-}  // namespace
+} // namespace
 
-bool LoadScenarioFromDir(const std::string& scenario_dir, Scenario* out,
-                         std::string* error) {
+bool LoadScenarioFromDir(const std::string &scenario_dir, Scenario *out,
+                         std::string *error) {
   out->tracks.clear();
   out->timestamps_seconds.clear();
 
@@ -55,8 +57,10 @@ bool LoadScenarioFromDir(const std::string& scenario_dir, Scenario* out,
 
   google::protobuf::Struct meta;
   google::protobuf::Struct objs;
-  if (!ReadJsonFileToStruct(meta_path.string(), &meta, error)) return false;
-  if (!ReadJsonFileToStruct(objs_path.string(), &objs, error)) return false;
+  if (!ReadJsonFileToStruct(meta_path.string(), &meta, error))
+    return false;
+  if (!ReadJsonFileToStruct(objs_path.string(), &objs, error))
+    return false;
 
   out->scenario_id = GetFieldString(meta, "scenario_id", "");
   out->init_pose = ParsePose(GetFieldStruct(meta, "init_pose"));
@@ -66,30 +70,33 @@ bool LoadScenarioFromDir(const std::string& scenario_dir, Scenario* out,
   out->sdc_track_index =
       static_cast<int64_t>(GetFieldNumber(objs, "sdc_track_index", -1.0));
 
-  if (const auto* ts = GetFieldList(objs, "timestamps_seconds")) {
+  if (const auto *ts = GetFieldList(objs, "timestamps_seconds")) {
     out->timestamps_seconds.reserve(ts->values_size());
-    for (const auto& v : ts->values()) {
+    for (const auto &v : ts->values()) {
       out->timestamps_seconds.push_back(GetNumber(v, 0.0));
     }
   }
 
-  const auto* tracks = GetFieldList(objs, "tracks");
+  const auto *tracks = GetFieldList(objs, "tracks");
   if (!tracks) {
-    if (error) *error = "dynamic_objects.json missing tracks";
+    if (error)
+      *error = "dynamic_objects.json missing tracks";
     return false;
   }
   out->tracks.reserve(tracks->values_size());
-  for (const auto& tv : tracks->values()) {
-    if (tv.kind_case() != google::protobuf::Value::kStructValue) continue;
-    const auto& t = tv.struct_value();
+  for (const auto &tv : tracks->values()) {
+    if (tv.kind_case() != google::protobuf::Value::kStructValue)
+      continue;
+    const auto &t = tv.struct_value();
     Track track;
-    track.track_index = static_cast<int64_t>(GetFieldNumber(t, "track_index", 0.0));
+    track.track_index =
+        static_cast<int64_t>(GetFieldNumber(t, "track_index", 0.0));
     track.id = static_cast<int64_t>(GetFieldNumber(t, "id", 0.0));
     track.object_type = GetFieldString(t, "object_type", "OTHER");
     track.is_sdc = GetFieldBool(t, "is_sdc", false);
-    if (const auto* states = GetFieldList(t, "states")) {
+    if (const auto *states = GetFieldList(t, "states")) {
       track.states.reserve(states->values_size());
-      for (const auto& sv : states->values()) {
+      for (const auto &sv : states->values()) {
         if (sv.kind_case() != google::protobuf::Value::kStructValue) {
           track.states.emplace_back();
           continue;
@@ -101,10 +108,11 @@ bool LoadScenarioFromDir(const std::string& scenario_dir, Scenario* out,
   }
 
   if (out->timestamps_seconds.empty()) {
-    if (error) *error = "timestamps_seconds is empty";
+    if (error)
+      *error = "timestamps_seconds is empty";
     return false;
   }
   return true;
 }
 
-}  // namespace hyw_sim
+} // namespace hyw_sim
