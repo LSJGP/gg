@@ -12,6 +12,7 @@ struct WorldConfig {
   double dt = 0.1;
   double max_seconds = 0.0;
   bool stop_on_collision = false;
+  double initial_ego_speed_mps = 0.0;
 };
 
 class WorldSimulator {

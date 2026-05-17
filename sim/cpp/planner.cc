@@ -24,6 +24,40 @@ bool RegisterPlanner(const std::string& name, PlannerCreator creator) {
   return true;
 }
 
+int ClosestValidRefIndex(const std::vector<ReferencePoint>& ref, double x, double y) {
+  int best = -1;
+  double best_d = 1e300;
+  for (int i = 0; i < static_cast<int>(ref.size()); ++i) {
+    if (!ref[i].valid) continue;
+    const double d = std::hypot(ref[i].x - x, ref[i].y - y);
+    if (d < best_d) {
+      best_d = d;
+      best = i;
+    }
+  }
+  return best;
+}
+
+bool RefTangent(const std::vector<ReferencePoint>& ref, int i, double* tx, double* ty) {
+  if (i < 0 || i >= static_cast<int>(ref.size())) return false;
+  if (!ref[i].valid) return false;
+  for (int j = i + 1; j < static_cast<int>(ref.size()); ++j) {
+    if (!ref[j].valid) continue;
+    const double dx = ref[j].x - ref[i].x;
+    const double dy = ref[j].y - ref[i].y;
+    const double len = std::hypot(dx, dy);
+    if (len > 1e-6) {
+      *tx = dx / len;
+      *ty = dy / len;
+      return true;
+    }
+  }
+  const double h = ref[i].heading;
+  *tx = std::cos(h);
+  *ty = std::sin(h);
+  return true;
+}
+
 class ReferenceTrajectoryPlanner final : public Planner {
  public:
   explicit ReferenceTrajectoryPlanner(const PlannerInputs& inputs)
@@ -40,9 +74,6 @@ class ReferenceTrajectoryPlanner final : public Planner {
   double ComputeLeaderLimitedSpeed(const VehicleState& ego,
                                    const std::vector<NPCSnapshot>& npcs,
                                    double desired_speed_mps) const;
-  const ReferencePoint* ReferenceAt(int frame_id) const;
-  const ReferencePoint* LookaheadReference(int frame_id, int lookahead_steps) const;
-
   Pose2D goal_;
   double desired_speed_mps_ = 13.9;
   std::vector<ReferencePoint> reference_points_;
@@ -52,18 +83,33 @@ PlanCommand ReferenceTrajectoryPlanner::Plan(const VehicleState& ego,
                                              const std::vector<NPCSnapshot>& npcs,
                                              double /*dt*/, int frame_id) const {
   PlanCommand cmd;
-  const ReferencePoint* ref = ReferenceAt(frame_id);
-  const ReferencePoint* lookahead = LookaheadReference(frame_id, 3);
+
+  int ref_idx = ClosestValidRefIndex(reference_points_, ego.x, ego.y);
+  if (ref_idx < 0 && !reference_points_.empty()) {
+    const int idx = std::max(
+        0, std::min(frame_id, static_cast<int>(reference_points_.size() - 1)));
+    if (reference_points_[idx].valid) ref_idx = idx;
+  }
 
   double target_x = goal_.x;
   double target_y = goal_.y;
   double target_speed = desired_speed_mps_;
-  if (lookahead && lookahead->valid) {
-    target_x = lookahead->x;
-    target_y = lookahead->y;
-  }
-  if (ref && ref->valid) {
-    target_speed = std::min(desired_speed_mps_, std::max(0.0, ref->speed));
+  if (ref_idx >= 0) {
+    target_speed = std::min(desired_speed_mps_,
+                            std::max(0.0, reference_points_[ref_idx].speed));
+    const int look = std::min(
+        ref_idx + 15, static_cast<int>(reference_points_.size() - 1));
+    for (int j = look; j > ref_idx; --j) {
+      if (reference_points_[j].valid) {
+        target_x = reference_points_[j].x;
+        target_y = reference_points_[j].y;
+        break;
+      }
+    }
+    if (target_x == goal_.x && target_y == goal_.y) {
+      target_x = reference_points_[ref_idx].x;
+      target_y = reference_points_[ref_idx].y;
+    }
   }
   target_speed = ComputeLeaderLimitedSpeed(ego, npcs, target_speed);
   cmd.desired_speed_mps = target_speed;
@@ -110,22 +156,6 @@ double ReferenceTrajectoryPlanner::ComputeLeaderLimitedSpeed(
     }
   }
   return safe_speed;
-}
-
-const ReferencePoint* ReferenceTrajectoryPlanner::ReferenceAt(int frame_id) const {
-  if (reference_points_.empty()) return nullptr;
-  const int clamped =
-      std::max(0, std::min(frame_id, static_cast<int>(reference_points_.size() - 1)));
-  return &reference_points_[clamped];
-}
-
-const ReferencePoint* ReferenceTrajectoryPlanner::LookaheadReference(
-    int frame_id, int lookahead_steps) const {
-  if (reference_points_.empty()) return nullptr;
-  const int idx = std::max(
-      0, std::min(frame_id + lookahead_steps,
-                  static_cast<int>(reference_points_.size() - 1)));
-  return &reference_points_[idx];
 }
 
 class GoalSeekPlanner final : public Planner {
@@ -201,40 +231,6 @@ OBB MakeNpcObbAt(const NPCSnapshot& n, double t_ahead, double inflate) {
   npc_box.half_width = std::max(0.3, n.width * 0.5) + inflate;
   npc_box.half_height = std::max(0.2, n.height * 0.5);
   return npc_box;
-}
-
-int ClosestValidRefIndex(const std::vector<ReferencePoint>& ref, double x, double y) {
-  int best = -1;
-  double best_d = 1e300;
-  for (int i = 0; i < static_cast<int>(ref.size()); ++i) {
-    if (!ref[i].valid) continue;
-    const double d = std::hypot(ref[i].x - x, ref[i].y - y);
-    if (d < best_d) {
-      best_d = d;
-      best = i;
-    }
-  }
-  return best;
-}
-
-bool RefTangent(const std::vector<ReferencePoint>& ref, int i, double* tx, double* ty) {
-  if (i < 0 || i >= static_cast<int>(ref.size())) return false;
-  if (!ref[i].valid) return false;
-  for (int j = i + 1; j < static_cast<int>(ref.size()); ++j) {
-    if (!ref[j].valid) continue;
-    const double dx = ref[j].x - ref[i].x;
-    const double dy = ref[j].y - ref[i].y;
-    const double len = std::hypot(dx, dy);
-    if (len > 1e-6) {
-      *tx = dx / len;
-      *ty = dy / len;
-      return true;
-    }
-  }
-  const double h = ref[i].heading;
-  *tx = std::cos(h);
-  *ty = std::sin(h);
-  return true;
 }
 
 double LeaderLimitedSpeedDwa(const VehicleState& ego,
@@ -319,30 +315,28 @@ PlanCommand LocalDwaPlanner::Plan(const VehicleState& ego,
   constexpr int kSteerSamples = 13;
   constexpr int kAccelSamples = 7;
 
-  const ReferencePoint* ref_frame = nullptr;
-  if (!reference_points_.empty()) {
-    const int clamped = std::max(
-        0, std::min(frame_id, static_cast<int>(reference_points_.size() - 1)));
-    ref_frame = &reference_points_[clamped];
-    if (!ref_frame->valid) ref_frame = nullptr;
-  }
-
-  double target_speed = desired_speed_mps_;
-  if (ref_frame != nullptr) {
-    target_speed = std::min(desired_speed_mps_, std::max(0.0, ref_frame->speed));
-  }
-  target_speed = LeaderLimitedSpeedDwa(ego, npcs, target_speed, p_);
+  (void)frame_id;
 
   const double dx_goal = goal_.x - ego.x;
   const double dy_goal = goal_.y - ego.y;
   const double dist_goal = std::hypot(dx_goal, dy_goal);
 
   int ref_idx = ClosestValidRefIndex(reference_points_, ego.x, ego.y);
-  if (ref_idx < 0 && ref_frame != nullptr) {
+  if (ref_idx < 0 && !reference_points_.empty()) {
     const int idx = std::max(
         0, std::min(frame_id, static_cast<int>(reference_points_.size() - 1)));
     if (reference_points_[idx].valid) ref_idx = idx;
   }
+
+  double target_speed = desired_speed_mps_;
+  if (ref_idx >= 0) {
+    target_speed = std::min(desired_speed_mps_,
+                            std::max(0.0, reference_points_[ref_idx].speed));
+  }
+  if (dist_goal > 10.0) {
+    target_speed = std::max(target_speed, 2.0);
+  }
+  target_speed = LeaderLimitedSpeedDwa(ego, npcs, target_speed, p_);
 
   double tx = std::cos(ego.heading);
   double ty = std::sin(ego.heading);
@@ -436,8 +430,13 @@ PlanCommand LocalDwaPlanner::Plan(const VehicleState& ego,
   if (!found_free) {
     PlanCommand fb =
         FallbackPurePursuit(ego, target_x, target_y, target_speed);
-    fb.target_acceleration =
-        std::min(fb.target_acceleration, -0.65 * p_.max_decel);
+    if (ego.speed < 1.0 && dist_goal > 3.0) {
+      fb.target_acceleration =
+          std::max(fb.target_acceleration, 0.8);
+    } else {
+      fb.target_acceleration =
+          std::min(fb.target_acceleration, -0.65 * p_.max_decel);
+    }
     if (dist_goal < 4.0) {
       fb.desired_speed_mps =
           std::min(fb.desired_speed_mps, std::max(0.0, dist_goal * 2.0));
@@ -447,6 +446,9 @@ PlanCommand LocalDwaPlanner::Plan(const VehicleState& ego,
 
   PlanCommand cmd;
   cmd.target_acceleration = best_a;
+  if (ego.speed < 0.5 && dist_goal > 5.0 && cmd.target_acceleration < 0.3) {
+    cmd.target_acceleration = 0.5;
+  }
   cmd.steering_angle = best_steer;
   cmd.desired_speed_mps = target_speed;
   if (dist_goal < 4.0) {

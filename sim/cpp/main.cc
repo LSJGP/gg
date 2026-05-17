@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "cpp/grading_bridge.h"
+#include "cpp/lane_graph.h"
 #include "cpp/planner.h"
 #include "cpp/scenario_loader.h"
 #include "cpp/sim_logger.h"
@@ -26,7 +27,9 @@ struct Args {
   double dt = 0.1;
   double max_seconds = 0.0;
   bool stop_on_collision = false;
-  std::string planner = "reference_tracker";
+  std::string planner = "local_dwa";
+  std::string reference_source = "map";
+  double reference_step = 1.0;
   double desired_speed = 13.9;
   double ego_length = 4.5;
   double ego_width = 1.85;
@@ -48,7 +51,9 @@ void PrintUsage(const char* argv0) {
       << "  --dt <seconds>\n"
       << "  --max-seconds <seconds>\n"
       << "  --stop-on-collision\n"
-      << "  --planner <name>\n"
+      << "  --planner <name>  (default: local_dwa)\n"
+      << "  --reference-source <map|sdc>  (default: map)\n"
+      << "  --reference-step <meters>  (default: 1.0, map mode)\n"
       << "  --desired-speed <mps>\n"
       << "  --grading-bin <path-to-grading_main>\n"
       << "  --grading-report <report-path>\n"
@@ -82,6 +87,10 @@ bool ParseArgs(int argc, char** argv, Args* args) {
       args->stop_on_collision = true;
     } else if (k == "--planner") {
       args->planner = next("--planner");
+    } else if (k == "--reference-source") {
+      args->reference_source = next("--reference-source");
+    } else if (k == "--reference-step") {
+      args->reference_step = std::stod(next("--reference-step"));
     } else if (k == "--desired-speed") {
       args->desired_speed = std::stod(next("--desired-speed"));
     } else if (k == "--ego-length") {
@@ -146,42 +155,58 @@ int main(int argc, char** argv) {
   params.max_speed = args.ego_max_speed;
 
   std::vector<hyw_sim::ReferencePoint> reference_points;
-  size_t max_steps = scenario.timestamps_seconds.size();
-  const hyw_sim::Track* sdc_track = nullptr;
-  for (const auto& tr : scenario.tracks) {
-    if (tr.is_sdc ||
-        (scenario.sdc_track_index >= 0 && tr.track_index == scenario.sdc_track_index)) {
-      sdc_track = &tr;
+  double route_speed_mps = args.desired_speed;
+
+  if (args.reference_source == "map") {
+    const fs::path lane_graph_path =
+        fs::path(args.scenario_dir) / "lane_graph.json";
+    hyw_sim::LaneGraph lane_graph;
+    if (!hyw_sim::LaneGraph::LoadFromFile(lane_graph_path.string(), &lane_graph,
+                                          &err)) {
+      std::cerr << "[sim_cpp] fail: " << err << "\n";
+      return 2;
+    }
+    hyw_sim::MapRouteResult route;
+    if (!hyw_sim::BuildMapReference(scenario, lane_graph, args.reference_step,
+                                    &route, &err)) {
+      std::cerr << "[sim_cpp] fail: " << err << "\n";
+      return 2;
+    }
+    reference_points = std::move(route.reference_points);
+    route_speed_mps = route.speed_limit_mps;
+    std::cout << "[sim_cpp] route: " << route.route_lane_ids.size() << " lanes, "
+              << reference_points.size() << " ref points, limit="
+              << (route_speed_mps * 3.6) << " km/h\n";
+  } else if (args.reference_source == "sdc") {
+    reference_points = hyw_sim::BuildSdcReference(scenario);
+    if (reference_points.empty()) {
+      std::cerr << "[sim_cpp] fail: no SDC track for --reference-source sdc\n";
+      return 2;
+    }
+    std::cout << "[sim_cpp] reference: SDC track (" << reference_points.size()
+              << " points)\n";
+  } else {
+    std::cerr << "[sim_cpp] fail: unknown --reference-source "
+              << args.reference_source << " (use map or sdc)\n";
+    return 2;
+  }
+
+  hyw_sim::PlannerInputs planner_inputs;
+  planner_inputs.goal = scenario.goal_pose;
+  planner_inputs.desired_speed_mps =
+      std::min(args.desired_speed, route_speed_mps);
+  planner_inputs.reference_points = std::move(reference_points);
+  planner_inputs.ego_vehicle = params;
+
+  double initial_ego_speed_mps = 0.0;
+  for (const auto& rp : planner_inputs.reference_points) {
+    if (rp.valid && rp.speed > 0.5) {
+      initial_ego_speed_mps =
+          std::min(params.max_speed, std::max(1.0, 0.35 * rp.speed));
       break;
     }
   }
-  if (sdc_track != nullptr && !sdc_track->states.empty()) {
-    max_steps = std::max(max_steps, sdc_track->states.size());
-    reference_points.assign(max_steps, hyw_sim::ReferencePoint{});
-    hyw_sim::ReferencePoint last_valid;
-    bool has_last_valid = false;
-    for (size_t i = 0; i < max_steps; ++i) {
-      if (i < sdc_track->states.size() && sdc_track->states[i].valid) {
-        const auto& st = sdc_track->states[i];
-        hyw_sim::ReferencePoint rp;
-        rp.x = st.x;
-        rp.y = st.y;
-        rp.heading = st.yaw;
-        rp.speed = std::hypot(st.vx, st.vy);
-        rp.valid = true;
-        reference_points[i] = rp;
-        last_valid = rp;
-        has_last_valid = true;
-      } else if (has_last_valid) {
-        reference_points[i] = last_valid;
-      }
-    }
-  }
-  hyw_sim::PlannerInputs planner_inputs;
-  planner_inputs.goal = scenario.goal_pose;
-  planner_inputs.desired_speed_mps = args.desired_speed;
-  planner_inputs.reference_points = std::move(reference_points);
-  planner_inputs.ego_vehicle = params;
+
   auto planner = hyw_sim::CreatePlanner(args.planner, planner_inputs, &err);
   if (!planner) {
     std::cerr << "[sim_cpp] failed to create planner: " << err << "\n";
@@ -214,6 +239,7 @@ int main(int argc, char** argv) {
   cfg.dt = args.dt;
   cfg.max_seconds = args.max_seconds;
   cfg.stop_on_collision = args.stop_on_collision;
+  cfg.initial_ego_speed_mps = initial_ego_speed_mps;
 
   hyw_sim::WorldSimulator world(scenario, params);
 

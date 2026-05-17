@@ -136,6 +136,7 @@ std::vector<FrameRecord> WorldSimulator::Run(
   ego.x = scenario_.init_pose.x;
   ego.y = scenario_.init_pose.y;
   ego.heading = scenario_.init_pose.yaw;
+  ego.speed = std::max(0.0, cfg.initial_ego_speed_mps);
 
   const int n_steps = std::max(1, static_cast<int>(std::round(total_seconds / cfg.dt)));
   out.reserve(n_steps);

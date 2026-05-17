@@ -34,6 +34,17 @@ cc_library(
 )
 
 cc_library(
+    name = "lane_graph",
+    srcs = ["lane_graph.cc"],
+    hdrs = ["lane_graph.h"],
+    deps = [
+        ":json_utils",
+        ":planner",
+        ":types",
+    ],
+)
+
+cc_library(
     name = "planner",
     srcs = ["planner.cc"],
     hdrs = ["planner.h"],
@@ -76,6 +87,7 @@ cc_binary(
     srcs = ["main.cc"],
     deps = [
         ":grading_bridge",
+        ":lane_graph",
         ":planner",
         ":scenario_loader",
         ":sim_logger",

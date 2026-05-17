@@ -26,7 +26,13 @@ def _parse_args(argv) -> argparse.Namespace:
         )
     )
     p.add_argument("--scenario-dir", required=True)
-    p.add_argument("--planner", default="reference_tracker")
+    p.add_argument("--planner", default="local_dwa")
+    p.add_argument(
+        "--reference-source",
+        choices=("map", "sdc"),
+        default="map",
+        help="Reference polyline: lane_graph route (map) or SDC track (sdc).",
+    )
     p.add_argument("--output", default=str(DEFAULT_SIMLOG_PATH))
     p.add_argument("--source-tag", default="waymo_sim_cpp")
     p.add_argument("--dt", type=float, default=0.1)
@@ -110,6 +116,10 @@ def main(argv=None) -> int:
         args.cpp_mode,
         "--planner",
         args.planner,
+        "--reference-source",
+        args.reference_source,
+        "--reference-step",
+        str(args.reference_step),
     ]
     if args.stop_on_collision:
         cmd.append("--stop-on-collision")
