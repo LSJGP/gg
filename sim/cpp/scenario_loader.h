@@ -2,11 +2,18 @@
 
 #include <string>
 
-#include "cpp/types.h"
+#include "proto/sim/map.pb.h"
+#include "proto/sim/scenario.pb.h"
 
 namespace hyw_sim {
 
-bool LoadScenarioFromDir(const std::string& scenario_dir, Scenario* out,
+struct ScenarioBundle {
+  proto::ScenarioMeta meta;
+  proto::DynamicObjects dynamic;
+  proto::StaticMap map;
+};
+
+bool LoadScenarioFromDir(const std::string& scenario_dir, ScenarioBundle* out,
                          std::string* error);
 
 }  // namespace hyw_sim

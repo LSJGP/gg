@@ -2,7 +2,10 @@
 
 #include <filesystem>
 #include <fstream>
-#include <sstream>
+
+#include "cpp/grading_convert.h"
+#include "google/protobuf/util/json_util.h"
+#include "proto/grading/sim_log.pb.h"
 
 namespace hyw_sim {
 namespace fs = std::filesystem;
@@ -23,55 +26,20 @@ std::string ShellSingleQuote(const std::string& p) {
   return out;
 }
 
-std::string EscapeJson(const std::string& in) {
-  std::string out;
-  out.reserve(in.size());
-  for (char c : in) {
-    switch (c) {
-      case '"':
-        out += "\\\"";
-        break;
-      case '\\':
-        out += "\\\\";
-        break;
-      case '\n':
-        out += "\\n";
-        break;
-      default:
-        out += c;
-    }
+std::string FrameToJsonLine(const proto::FrameRecord& frame,
+                            const proto::StaticMap* scene_map,
+                            const proto::VehicleParams& ego_params) {
+  const proto::StaticMap* map_ptr =
+      (frame.frame_id() == 0) ? scene_map : nullptr;
+  const auto input = ToMetricFrameInput(frame, map_ptr, ego_params);
+  std::string json;
+  google::protobuf::util::JsonPrintOptions opts;
+  opts.preserve_proto_field_names = true;
+  const auto st = google::protobuf::util::MessageToJsonString(input, &json, opts);
+  if (!st.ok()) {
+    return "{}";
   }
-  return out;
-}
-
-std::string FrameToJsonLine(const FrameRecord& f) {
-  std::ostringstream ss;
-  ss << "{";
-  ss << "\"frame_id\":" << f.frame_id << ",";
-  ss << "\"timestamp_us\":" << f.timestamp_us << ",";
-  ss << "\"vehicle_state\":{"
-     << "\"x\":" << f.ego.x << ","
-     << "\"y\":" << f.ego.y << ","
-     << "\"heading\":" << f.ego.heading << ","
-     << "\"speed\":" << f.ego.speed << ","
-     << "\"acceleration\":" << f.ego.acceleration << "},";
-  ss << "\"planning_command\":{"
-     << "\"desired_speed_mps\":" << f.command.desired_speed_mps << "}";
-  if (f.collision.collided) {
-    ss << ",\"collision_event\":{"
-       << "\"collided\":true,"
-       << "\"other_id\":" << f.collision.other_id << ","
-       << "\"kind\":\"" << EscapeJson(f.collision.kind) << "\","
-       << "\"ego_at_fault\":" << (f.collision.ego_at_fault ? "true" : "false")
-       << ","
-       << "\"exempt\":" << (f.collision.exempt ? "true" : "false") << ","
-       << "\"exempt_reason\":\"" << EscapeJson(f.collision.exempt_reason) << "\","
-       << "\"relative_speed_mps\":" << f.collision.relative_speed_mps << ","
-       << "\"ego_speed_mps\":" << f.collision.ego_speed_mps << ","
-       << "\"approach_angle_deg\":" << f.collision.approach_angle_deg << "}";
-  }
-  ss << "}";
-  return ss.str();
+  return json;
 }
 
 }  // namespace
@@ -80,7 +48,7 @@ StreamPipeWriter::~StreamPipeWriter() { Close(); }
 
 void StreamPipeWriter::WriterLoop() {
   while (true) {
-    FrameRecord frame;
+    proto::FrameRecord frame;
     {
       std::unique_lock<std::mutex> lk(mu_);
       cv_.wait(lk, [&] { return !queue_.empty() || producer_done_; });
@@ -98,31 +66,34 @@ void StreamPipeWriter::WriterLoop() {
       write_failed_ = true;
       break;
     }
-    const std::string line = FrameToJsonLine(frame) + "\n";
-    if (std::fwrite(line.data(), 1, line.size(), pipe_) != line.size()) {
+    const std::string line = FrameToJsonLine(frame, scene_map_, ego_params_);
+    if (std::fputs((line + "\n").c_str(), pipe_) < 0) {
       write_failed_ = true;
       break;
     }
     std::fflush(pipe_);
-  }
-  std::lock_guard<std::mutex> lk(mu_);
-  if (pipe_) {
-    ::pclose(pipe_);
-    pipe_ = nullptr;
   }
 }
 
 bool StreamPipeWriter::Start(const std::string& grading_bin,
                              const std::string& report_path,
                              const std::string& metrics_config_path,
+                             const proto::StaticMap* scene_map,
+                             const proto::VehicleParams& ego_params,
                              std::string* error) {
-  std::string cmd = grading_bin + " --stream " + ShellSingleQuote(report_path);
+  scene_map_ = scene_map;
+  ego_params_ = ego_params;
+  std::string cmd = grading_bin + " --stream";
   if (!metrics_config_path.empty()) {
     cmd += " --metrics-config " + ShellSingleQuote(metrics_config_path);
   }
-  pipe_ = ::popen(cmd.c_str(), "w");
+  if (!report_path.empty()) {
+    cmd += " " + ShellSingleQuote(report_path);
+  }
+  cmd += " 2>/dev/null";
+  pipe_ = popen(cmd.c_str(), "w");
   if (!pipe_) {
-    if (error) *error = "failed to start grading stream process";
+    if (error) *error = "failed to start grading_main --stream";
     return false;
   }
   {
@@ -136,7 +107,7 @@ bool StreamPipeWriter::Start(const std::string& grading_bin,
   return true;
 }
 
-void StreamPipeWriter::EnqueueFrame(const FrameRecord& frame) {
+void StreamPipeWriter::EnqueueFrame(const proto::FrameRecord& frame) {
   std::lock_guard<std::mutex> lk(mu_);
   if (producer_done_ || finish_called_ || !pipe_) {
     return;
@@ -158,6 +129,10 @@ bool StreamPipeWriter::Finish(std::string* error) {
   if (writer_.joinable()) {
     writer_.join();
   }
+  if (pipe_) {
+    pclose(pipe_);
+    pipe_ = nullptr;
+  }
   if (write_failed_) {
     if (error) *error = "failed writing frame to grading stream";
     return false;
@@ -171,19 +146,31 @@ void StreamPipeWriter::Close() {
 }
 
 bool WriteSimLogJson(const std::string& output_path, const std::string& source_tag,
-                     const std::vector<FrameRecord>& frames, std::string* error) {
+                     const std::vector<proto::FrameRecord>& frames,
+                     const proto::StaticMap& scene_map,
+                     const proto::VehicleParams& ego_params, std::string* error) {
   fs::create_directories(fs::path(output_path).parent_path());
+  grading_mini::proto::SimLog log;
+  log.set_source(source_tag);
+  for (const auto& frame : frames) {
+    const proto::StaticMap* map_ptr = (frame.frame_id() == 0) ? &scene_map : nullptr;
+    *log.add_frames() = ToMetricFrameInput(frame, map_ptr, ego_params);
+  }
+  std::string json;
+  google::protobuf::util::JsonPrintOptions opts;
+  opts.preserve_proto_field_names = true;
+  const auto st =
+      google::protobuf::util::MessageToJsonString(log, &json, opts);
+  if (!st.ok()) {
+    if (error) *error = std::string(st.message());
+    return false;
+  }
   std::ofstream out(output_path);
   if (!out.is_open()) {
     if (error) *error = "failed to open output simlog json";
     return false;
   }
-  out << "{\"source\":\"" << EscapeJson(source_tag) << "\",\"frames\":[";
-  for (size_t i = 0; i < frames.size(); ++i) {
-    if (i) out << ",";
-    out << FrameToJsonLine(frames[i]);
-  }
-  out << "]}";
+  out << json;
   return true;
 }
 

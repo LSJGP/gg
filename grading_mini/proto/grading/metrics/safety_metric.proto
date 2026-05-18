@@ -1,0 +1,8 @@
+syntax = "proto3";
+
+package grading_mini.proto;
+
+message LaneDepartureCheckerConfig {
+  double min_road_edge_clearance_m = 1;
+  double min_lane_boundary_clearance_m = 2;
+}

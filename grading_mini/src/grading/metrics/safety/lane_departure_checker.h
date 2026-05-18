@@ -1,17 +1,12 @@
 #pragma once
 
+#include "proto/grading/scene.pb.h"
 #include "src/grading/metric_base.h"
 #include "src/grading/metric_register.h"
 
 namespace grading_mini {
 
-// Detects NPC–ego OBB overlap from MetricFrameInput and classifies regulatory
-// exemption. The metric PASSES only if there is no non-exempt collision over
-// the whole run. Exempt examples:
-//   - rear_end_on_slow_ego : NPC rear-ends a stationary / slow ego
-//   - forced_cut_in        : NPC laterally enters ego's lane
-//   - wrong_way_head_on    : NPC approaches head-on in the wrong direction
-class RegulatoryCollisionChecker : public MetricBase {
+class LaneDepartureChecker : public MetricBase {
  public:
   absl::Status Init(const google::protobuf::Message* config) override;
 
@@ -24,10 +19,15 @@ class RegulatoryCollisionChecker : public MetricBase {
       const std::deque<MetricFrameOutput>& history) override;
 
  private:
+  double MinRoadEdgeDistance(const proto::SceneMap& map, double x, double y) const;
+  double MinCornerRoadEdgeDistance(const MetricFrameInput& input) const;
+
+  double min_road_edge_clearance_m_ = 0.35;
+  double min_lane_boundary_clearance_m_ = 0.0;
+  bool has_scene_map_ = false;
+  proto::SceneMap scene_map_;
   int total_frames_ = 0;
-  int collision_frames_ = 0;
-  int exempt_frames_ = 0;
-  int non_exempt_frames_ = 0;
+  int violation_frames_ = 0;
 };
 
 }  // namespace grading_mini

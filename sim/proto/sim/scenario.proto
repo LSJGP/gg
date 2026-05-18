@@ -1,0 +1,67 @@
+syntax = "proto3";
+
+package hyw_sim.proto;
+
+import "proto/sim/common.proto";
+
+message TrackState {
+  bool valid = 1;
+  double x = 2;
+  double y = 3;
+  double z = 4;
+  double yaw = 5;
+  double vx = 6;
+  double vy = 7;
+  double length = 8;
+  double width = 9;
+  double height = 10;
+}
+
+message Track {
+  int64 track_index = 1;
+  int64 id = 2;
+  string object_type = 3;
+  bool is_sdc = 4;
+  repeated TrackState states = 5;
+}
+
+message ScenarioStats {
+  int32 lanes = 1;
+  int32 road_lines = 2;
+  int32 road_edges = 3;
+  int32 crosswalks = 4;
+  int32 stop_signs = 5;
+  int32 driveways = 6;
+  int32 speed_bumps = 7;
+  int32 timestamps = 8;
+  double duration_s = 9;
+  int32 current_time_index = 10;
+  int32 tracks_total = 11;
+  map<string, int32> tracks_non_sdc_by_type = 12;
+}
+
+message ScenarioMeta {
+  string source = 1;
+  string scenario_id = 2;
+  int32 scenario_index = 3;
+  WorldOffset world_offset = 4;
+  Pose2D init_pose = 5;
+  Pose2D goal_pose = 6;
+  Bbox2D bbox = 7;
+  ScenarioStats stats = 8;
+}
+
+message DynamicObjects {
+  string source = 1;
+  string scenario_id = 2;
+  WorldOffset world_offset = 3;
+  repeated double timestamps_seconds = 4;
+  int64 current_time_index = 5;
+  int64 sdc_track_index = 6;
+  repeated Track tracks = 7;
+}
+
+message ScenarioBundle {
+  ScenarioMeta meta = 1;
+  DynamicObjects dynamic = 2;
+}

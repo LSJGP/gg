@@ -31,3 +31,8 @@ http_archive(
     strip_prefix = "fmt-10.2.1",
     urls = ["https://github.com/fmtlib/fmt/archive/refs/tags/10.2.1.tar.gz"],
 )
+
+local_repository(
+    name = "grading_mini",
+    path = "../grading_mini",
+)

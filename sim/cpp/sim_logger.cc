@@ -173,13 +173,13 @@ void SimFileLogger::Log(SimLogLevel level, std::string_view message,
   }
 }
 
-void SimFileLogger::LogFrame(SimLogLevel level, const FrameRecord& f) {
+void SimFileLogger::LogFrame(SimLogLevel level, const proto::FrameRecord& f) {
   if (!ShouldEmit(level)) return;
   std::ostringstream data;
-  data << "{\"frame_id\":" << f.frame_id << ",\"timestamp_us\":" << f.timestamp_us
-       << ",\"ego\":{\"x\":" << f.ego.x << ",\"y\":" << f.ego.y
-       << ",\"heading\":" << f.ego.heading << ",\"speed\":" << f.ego.speed
-       << "},\"collision\":" << (f.collision.collided ? "true" : "false") << "}";
+  data << "{\"frame_id\":" << f.frame_id() << ",\"timestamp_us\":" << f.timestamp_us()
+       << ",\"ego\":{\"x\":" << f.ego().x() << ",\"y\":" << f.ego().y()
+       << ",\"heading\":" << f.ego().heading() << ",\"speed\":" << f.ego().speed()
+       << "},\"npcs\":" << f.num_npcs() << "}";
   Log(level, "frame", data.str());
 }
 

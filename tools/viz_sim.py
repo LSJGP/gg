@@ -1,17 +1,13 @@
 #!/usr/bin/env python3
-"""2D visualization: lane map, map reference route, sim ego trail, NPC/ego OBBs.
+"""2D visualization: full static map, reference route, sim ego trail, NPC/ego OBBs.
 
 Requires: pip install matplotlib
 
-Example (after running sim):
+Example:
   python3 tools/viz_sim.py \\
-    --scenario-dir scenarios/waymo_scenario_5 \\
-    --sim-log output/log/sim_log.json \\
-    --animate --output output/viz/sim.gif --fps 8
-
-Single frame:
-  python3 tools/viz_sim.py --scenario-dir scenarios/waymo_scenario_5 \\
-    --sim-log output/log/sim_log.json --frame 40 --output /tmp/frame40.png
+    --scenario-dir scenarios/waymo_scenario_244 \\
+    --sim-log output/log/waymo_scenario_244_sim_log.json \\
+    --animate --output output/viz/waymo_scenario_244_sim.gif --fps 120
 """
 
 from __future__ import annotations
@@ -22,7 +18,7 @@ import math
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT / "pysim"))
@@ -43,12 +39,31 @@ class NpcView:
     width: float
 
 
+@dataclass
+class StaticMapDraw:
+    lanes: List[dict]
+    road_lines: List[dict]
+    road_edges: List[dict]
+    crosswalks: List[dict]
+
+
 def _wrap_pi(a: float) -> float:
     while a > math.pi:
         a -= 2.0 * math.pi
     while a < -math.pi:
         a += 2.0 * math.pi
     return a
+
+
+def load_static_map(path: Path) -> StaticMapDraw:
+    with open(path, encoding="utf-8") as f:
+        doc = json.load(f)
+    return StaticMapDraw(
+        lanes=doc.get("lanes", []),
+        road_lines=doc.get("road_lines", []),
+        road_edges=doc.get("road_edges", []),
+        crosswalks=doc.get("crosswalks", []),
+    )
 
 
 def npcs_at_time(scenario: Scenario, scenario_time: float) -> List[NpcView]:
@@ -124,10 +139,26 @@ def _interp_npcs(scenario: Scenario, lo: int, hi: int, a: float) -> List[NpcView
     return out
 
 
+def npcs_from_frame(fr: dict) -> List[NpcView]:
+    out: List[NpcView] = []
+    for n in fr.get("npcs", []):
+        out.append(
+            NpcView(
+                id=int(n.get("id", 0)),
+                object_type=str(n.get("object_type", "VEHICLE")),
+                x=float(n.get("x", 0)),
+                y=float(n.get("y", 0)),
+                heading=float(n.get("heading", 0)),
+                length=float(n.get("length", 4.0)),
+                width=float(n.get("width", 1.8)),
+            )
+        )
+    return out
+
+
 def build_map_route(
     scenario: Scenario, lane_graph: LaneGraph, reference_step: float
 ) -> Tuple[List[Tuple[float, float, float]], List[int]]:
-    """Match C++ BuildMapReference / pysim run_sim routing (fail → empty)."""
     if scenario.init_pose is None or scenario.goal_pose is None:
         return [], []
     init, goal = scenario.init_pose, scenario.goal_pose
@@ -179,21 +210,21 @@ def load_sim_log(path: Path) -> List[dict]:
 
 
 def _parse_args() -> argparse.Namespace:
-    p = argparse.ArgumentParser(description="2D sim visualization (map + OBBs)")
+    p = argparse.ArgumentParser(description="2D sim visualization (full map + OBBs)")
     p.add_argument("--scenario-dir", required=True, type=Path)
-    p.add_argument("--sim-log", required=True, type=Path, help="sim_log.json from sim_runner")
-    p.add_argument("--output", type=Path, default=None, help="PNG or GIF path")
-    p.add_argument("--frame", type=int, default=-1, help="Frame index (-1 = last)")
-    p.add_argument("--animate", action="store_true", help="Export animated GIF")
-    p.add_argument("--fps", type=int, default=8)
-    p.add_argument("--interactive", action="store_true", help="Slider UI (requires display)")
+    p.add_argument("--sim-log", required=True, type=Path)
+    p.add_argument("--output", type=Path, default=None)
+    p.add_argument("--frame", type=int, default=-1)
+    p.add_argument("--animate", action="store_true")
+    p.add_argument("--fps", type=int, default=120)
+    p.add_argument("--interactive", action="store_true")
     p.add_argument("--reference-step", type=float, default=1.0)
     p.add_argument("--ego-length", type=float, default=4.5)
     p.add_argument("--ego-width", type=float, default=1.85)
     p.add_argument("--ego-rear-overhang", type=float, default=0.95)
-    p.add_argument("--show-sdc-track", action="store_true", help="Overlay recorded SDC polyline")
-    p.add_argument("--no-reference", action="store_true", help="Hide map reference route")
-    p.add_argument("--dpi", type=int, default=120)
+    p.add_argument("--show-sdc-track", action="store_true")
+    p.add_argument("--no-reference", action="store_true")
+    p.add_argument("--dpi", type=int, default=100)
     return p.parse_args()
 
 
@@ -215,19 +246,43 @@ def _setup_axes(fig, ax, scenario: Scenario, margin: float = 15.0):
     ax.grid(True, alpha=0.25, linewidth=0.5)
 
 
-def _draw_lane_map(ax, lane_graph: LaneGraph) -> None:
+def _polyline_xy(poly: Sequence[Sequence[float]]) -> List[Tuple[float, float]]:
+    return [(float(p[0]), float(p[1])) for p in poly if len(p) >= 2]
+
+
+def _draw_full_map(ax, static_map: StaticMapDraw, lane_graph: LaneGraph) -> None:
+    for cw in static_map.crosswalks:
+        poly = _polyline_xy(cw.get("polygon", []))
+        if len(poly) < 3:
+            continue
+        xs = [p[0] for p in poly] + [poly[0][0]]
+        ys = [p[1] for p in poly] + [poly[0][1]]
+        ax.fill(xs, ys, color="#e8eaed", alpha=0.45, zorder=0)
+
+    for edge in static_map.road_edges:
+        pts = _polyline_xy(edge.get("polyline", []))
+        if len(pts) >= 2:
+            xs, ys = zip(*pts)
+            ax.plot(xs, ys, color="#5f6368", linewidth=1.4, alpha=0.75, zorder=1)
+
+    for line in static_map.road_lines:
+        pts = _polyline_xy(line.get("polyline", []))
+        if len(pts) >= 2:
+            xs, ys = zip(*pts)
+            ax.plot(xs, ys, color="#fbbc04", linewidth=0.9, alpha=0.7, linestyle="--", zorder=1)
+
     for lane in lane_graph.lanes.values():
         if len(lane.centerline) < 2:
             continue
         xs = [p[0] for p in lane.centerline]
         ys = [p[1] for p in lane.centerline]
         color = "#9aa0a6" if lane.type != "BIKE_LANE" else "#c4c7c5"
-        lw = 0.6 if lane.type != "FREEWAY" else 0.9
-        ax.plot(xs, ys, color=color, linewidth=lw, alpha=0.55, zorder=1)
+        lw = 0.55 if lane.type != "FREEWAY" else 0.85
+        ax.plot(xs, ys, color=color, linewidth=lw, alpha=0.6, zorder=2)
 
 
 def _draw_polyline_xy(
-    ax, pts: Sequence[Tuple[float, float]], *, color: str, lw: float, label: str, ls: str = "-", zorder: int = 2
+    ax, pts: Sequence[Tuple[float, float]], *, color: str, lw: float, label: str, ls: str = "-", zorder: int = 3
 ):
     if len(pts) < 2:
         return
@@ -246,6 +301,7 @@ def _draw_obb(ax, box: OBB, *, edge: str, face: str, lw: float, label: Optional[
 def _draw_frame(
     ax,
     scenario: Scenario,
+    static_map: StaticMapDraw,
     lane_graph: LaneGraph,
     route_xy: List[Tuple[float, float]],
     frames: List[dict],
@@ -255,69 +311,54 @@ def _draw_frame(
 ):
     ax.clear()
     _setup_axes(ax.figure, ax, scenario)
-    _draw_lane_map(ax, lane_graph)
+    _draw_full_map(ax, static_map, lane_graph)
 
     if not args.no_reference and route_xy:
         _draw_polyline_xy(ax, route_xy, color="#1a73e8", lw=2.2, label="map reference", zorder=3)
 
     if args.show_sdc_track and sdc_xy:
-        _draw_polyline_xy(ax, sdc_xy, color="#5f6368", lw=1.2, ls="--", label="SDC recorded", zorder=2)
+        _draw_polyline_xy(ax, sdc_xy, color="#5f6368", lw=1.2, ls="--", label="SDC recorded", zorder=3)
 
     trail = []
     for i in range(frame_idx + 1):
-        vs = frames[i].get("vehicle_state", {})
+        vs = frames[i].get("vehicle_state", frames[i].get("ego", {}))
         trail.append((float(vs.get("x", 0)), float(vs.get("y", 0))))
     if len(trail) >= 2:
         _draw_polyline_xy(ax, trail, color="#34a853", lw=2.0, label="sim ego trail", zorder=4)
 
     if scenario.init_pose:
-        ax.plot(
-            scenario.init_pose.x,
-            scenario.init_pose.y,
-            "o",
-            color="#1a73e8",
-            markersize=7,
-            label="init",
-            zorder=6,
-        )
+        ax.plot(scenario.init_pose.x, scenario.init_pose.y, "o", color="#1a73e8", markersize=7, label="init", zorder=6)
     if scenario.goal_pose:
-        ax.plot(
-            scenario.goal_pose.x,
-            scenario.goal_pose.y,
-            "*",
-            color="#ea4335",
-            markersize=12,
-            label="goal",
-            zorder=6,
-        )
+        ax.plot(scenario.goal_pose.x, scenario.goal_pose.y, "*", color="#ea4335", markersize=12, label="goal", zorder=6)
 
     fr = frames[frame_idx]
     t_us = int(fr.get("timestamp_us", 0))
     t_sec = t_us / 1e6
-    npcs = npcs_at_time(scenario, t_sec)
-    for n in npcs:
-        _draw_obb(
-            ax,
-            npc_obb(n),
-            edge="#f9ab00",
-            face="#f9ab00",
-            lw=1.0,
-            zorder=5,
-        )
 
-    vs = fr.get("vehicle_state", {})
+    npcs = npcs_from_frame(fr)
+    if not npcs:
+        npcs = npcs_at_time(scenario, t_sec)
+    for n in npcs:
+        _draw_obb(ax, npc_obb(n), edge="#f9ab00", face="#f9ab00", lw=1.0, zorder=5)
+
+    vs = fr.get("vehicle_state", fr.get("ego", {}))
     ex, ey = float(vs.get("x", 0)), float(vs.get("y", 0))
     eh = float(vs.get("heading", 0))
     esp = float(vs.get("speed", 0))
-    ebox = ego_obb(ex, ey, eh, args.ego_length, args.ego_width, args.ego_rear_overhang)
-    coll = fr.get("collision_event", {}).get("collided", False)
-    ego_edge = "#d93025" if coll else "#137333"
-    _draw_obb(ax, ebox, edge=ego_edge, face=ego_edge, lw=2.0, label="sim ego", zorder=7)
+    ev = fr.get("ego_vehicle", {})
+    elen = float(ev.get("length", args.ego_length))
+    ewid = float(ev.get("width", args.ego_width))
+    erear = float(ev.get("rear_overhang", args.ego_rear_overhang))
+    ebox = ego_obb(ex, ey, eh, elen, ewid, erear)
+    _draw_obb(ax, ebox, edge="#137333", face="#137333", lw=2.0, label="sim ego", zorder=7)
     ax.plot(ex, ey, "ko", markersize=3, zorder=8)
 
+    rc = fr.get("road_context", {})
+    rc_txt = ""
+    if rc:
+        rc_txt = f"  edge={rc.get('dist_to_road_edge_m', 0):.1f}m"
     ax.set_title(
-        f"frame {frame_idx}  t={t_sec:.2f}s  speed={esp:.2f} m/s  npcs={len(npcs)}"
-        + ("  COLLISION" if coll else "")
+        f"frame {frame_idx}  t={t_sec:.2f}s  speed={esp:.2f} m/s  npcs={len(npcs)}{rc_txt}"
     )
     handles, labels = ax.get_legend_handles_labels()
     by_label = dict(zip(labels, handles))
@@ -329,11 +370,7 @@ def _sdc_recorded_xy(scenario: Scenario) -> List[Tuple[float, float]]:
     tr = scenario.sdc_track()
     if tr is None:
         return []
-    out = []
-    for st in tr.states:
-        if st.valid:
-            out.append((st.x, st.y))
-    return out
+    return [(st.x, st.y) for st in tr.states if st.valid]
 
 
 def main() -> int:
@@ -352,6 +389,7 @@ def main() -> int:
         return 2
 
     scenario = load_scenario(scenario_dir)
+    static_map = load_static_map(scenario.lane_graph_path)
     lane_graph = LaneGraph.load(scenario.lane_graph_path)
     route_pts, route_ids = build_map_route(scenario, lane_graph, args.reference_step)
     route_xy = [(p[0], p[1]) for p in route_pts]
@@ -362,27 +400,23 @@ def main() -> int:
 
     print(
         f"[viz] scenario={scenario.scenario_id} lanes={len(lane_graph.lanes)} "
-        f"route_lanes={len(route_ids)} ref_pts={len(route_xy)} sim_frames={len(frames)}"
+        f"road_lines={len(static_map.road_lines)} road_edges={len(static_map.road_edges)} "
+        f"crosswalks={len(static_map.crosswalks)} route_lanes={len(route_ids)} "
+        f"ref_pts={len(route_xy)} sim_frames={len(frames)}"
     )
     sdc_xy = _sdc_recorded_xy(scenario) if args.show_sdc_track else None
 
     if args.interactive:
         fig, ax = plt.subplots(figsize=(12, 10))
-        _setup_axes(fig, ax, scenario)
+        from matplotlib.widgets import Slider
 
         def update(idx: int):
-            _draw_frame(ax, scenario, lane_graph, route_xy, frames, idx, args, sdc_xy)
+            _draw_frame(ax, scenario, static_map, lane_graph, route_xy, frames, idx, args, sdc_xy)
             fig.canvas.draw_idle()
-
-        from matplotlib.widgets import Slider
 
         ax_slider = fig.add_axes([0.15, 0.02, 0.7, 0.03])
         slider = Slider(ax_slider, "frame", 0, len(frames) - 1, valinit=0, valstep=1)
-
-        def on_change(val):
-            update(int(val))
-
-        slider.on_changed(on_change)
+        slider.on_changed(lambda val: update(int(val)))
         update(0)
         plt.show()
         return 0
@@ -394,7 +428,7 @@ def main() -> int:
         fig, ax = plt.subplots(figsize=(12, 10))
 
         def anim_fn(i: int):
-            _draw_frame(ax, scenario, lane_graph, route_xy, frames, i, args, sdc_xy)
+            _draw_frame(ax, scenario, static_map, lane_graph, route_xy, frames, i, args, sdc_xy)
 
         ani = FuncAnimation(fig, anim_fn, frames=len(frames), interval=1000 // max(1, args.fps))
         ani.save(str(out), writer=PillowWriter(fps=args.fps), dpi=args.dpi)
@@ -404,7 +438,7 @@ def main() -> int:
 
     frame_idx = len(frames) - 1 if args.frame < 0 else max(0, min(args.frame, len(frames) - 1))
     fig, ax = plt.subplots(figsize=(12, 10))
-    _draw_frame(ax, scenario, lane_graph, route_xy, frames, frame_idx, args, sdc_xy)
+    _draw_frame(ax, scenario, static_map, lane_graph, route_xy, frames, frame_idx, args, sdc_xy)
     out = args.output or (REPO_ROOT / "output" / "viz" / f"frame_{frame_idx:04d}.png")
     out = out.expanduser().resolve()
     out.parent.mkdir(parents=True, exist_ok=True)

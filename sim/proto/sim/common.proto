@@ -1,0 +1,28 @@
+syntax = "proto3";
+
+package hyw_sim.proto;
+
+message Vec3 {
+  double x = 1;
+  double y = 2;
+  double z = 3;
+}
+
+message Pose2D {
+  double x = 1;
+  double y = 2;
+  double yaw = 3;
+}
+
+message Bbox2D {
+  double xmin = 1;
+  double ymin = 2;
+  double xmax = 3;
+  double ymax = 4;
+}
+
+message WorldOffset {
+  double x = 1;
+  double y = 2;
+  double z = 3;
+}

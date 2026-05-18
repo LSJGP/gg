@@ -4,8 +4,9 @@
 Outputs (under --out-dir):
   scenario_meta.json     init / goal / world_offset / scenario_id / 统计信息
   dynamic_objects.json   每个 track 的逐帧状态（车 / 人 / 自行车 / SDC）
-  lane_graph.json        可路由车道图（id, type, speed_limit_kmh, centerline,
-                                       entry_lanes, exit_lanes）
+  lane_graph.json        静态地图全集（lanes / road_lines / road_edges /
+                                       crosswalks / stop_signs / driveways /
+                                       speed_bumps；坐标已减 world_offset）
 
 By default the SDC's first valid pose is anchored at (0, 0, 0); all map
 features and all NPC tracks are translated by the same world_offset, so the
@@ -45,11 +46,79 @@ WAYMO_LANE_TYPE = {
     3: "BIKE_LANE",
 }
 
+WAYMO_ROAD_LINE_TYPE = {
+    0: "TYPE_UNKNOWN",
+    1: "TYPE_BROKEN_SINGLE_WHITE",
+    2: "TYPE_SOLID_SINGLE_WHITE",
+    3: "TYPE_SOLID_DOUBLE_WHITE",
+    4: "TYPE_BROKEN_SINGLE_YELLOW",
+    5: "TYPE_BROKEN_DOUBLE_YELLOW",
+    6: "TYPE_SOLID_SINGLE_YELLOW",
+    7: "TYPE_SOLID_DOUBLE_YELLOW",
+    8: "TYPE_PASSING_DOUBLE_YELLOW",
+}
+
+WAYMO_ROAD_EDGE_TYPE = {
+    0: "TYPE_UNKNOWN",
+    1: "TYPE_ROAD_EDGE_BOUNDARY",
+    2: "TYPE_ROAD_EDGE_MEDIAN",
+}
+
 
 # ---------------- helpers ----------------
 
 def _polyline_to_xyz(polyline) -> List[Tuple[float, float, float]]:
     return [(float(p.x), float(p.y), float(getattr(p, "z", 0.0))) for p in polyline]
+
+
+def _offset_xyz(x: float, y: float, z: float, ox: float, oy: float, oz: float) -> List[float]:
+    return [x - ox, y - oy, z - oz]
+
+
+def _offset_polyline(
+    poly: List[Tuple[float, float, float]], ox: float, oy: float, oz: float
+) -> List[List[float]]:
+    return [_offset_xyz(x, y, z, ox, oy, oz) for x, y, z in poly]
+
+
+def _offset_point3(p, ox: float, oy: float, oz: float) -> Dict[str, float]:
+    return {
+        "x": float(p.x) - ox,
+        "y": float(p.y) - oy,
+        "z": float(getattr(p, "z", 0.0)) - oz,
+    }
+
+
+def _boundary_segments(segments) -> List[Dict]:
+    out: List[Dict] = []
+    for b in segments:
+        out.append(
+            {
+                "lane_start_index": int(b.lane_start_index),
+                "lane_end_index": int(b.lane_end_index),
+                "boundary_feature_id": int(b.boundary_feature_id),
+                "boundary_type": WAYMO_ROAD_LINE_TYPE.get(
+                    int(b.boundary_type), "TYPE_UNKNOWN"
+                ),
+            }
+        )
+    return out
+
+
+def _lane_neighbors(neighbors) -> List[Dict]:
+    out: List[Dict] = []
+    for n in neighbors:
+        out.append(
+            {
+                "feature_id": int(n.feature_id),
+                "self_start_index": int(n.self_start_index),
+                "self_end_index": int(n.self_end_index),
+                "neighbor_start_index": int(n.neighbor_start_index),
+                "neighbor_end_index": int(n.neighbor_end_index),
+                "boundaries": _boundary_segments(n.boundaries),
+            }
+        )
+    return out
 
 
 def _lane_speed_kmh(ln) -> float:
@@ -72,12 +141,9 @@ class ConvertedScene:
     sdc_track_index: int
     tracks: List[Dict]
     track_type_counts: Dict[str, int]
-    lane_graph: List[Dict]
+    static_map: Dict[str, List[Dict]]
     bbox: Tuple[float, float, float, float]
-    num_lanes: int
-    num_road_lines: int
-    num_road_edges: int
-    num_crosswalks: int
+    map_feature_counts: Dict[str, int]
 
 
 # ---------------- extraction ----------------
@@ -122,51 +188,133 @@ def _extract_tracks(scenario, ox: float, oy: float, oz: float, sdc_idx: int):
     return tracks, counts
 
 
-def _extract_lane_graph(scenario, ox: float, oy: float, oz: float) -> List[Dict]:
-    """车道连通图：每条 lane 的 type / 限速 / 中心线 / 前后接邻 ID。"""
-    out: List[Dict] = []
+def _extract_static_map(scenario, ox: float, oy: float, oz: float) -> Dict[str, List[Dict]]:
+    """导出 Waymo 静态地图全部 7 类 map feature。"""
+    out: Dict[str, List[Dict]] = {
+        "lanes": [],
+        "road_lines": [],
+        "road_edges": [],
+        "crosswalks": [],
+        "stop_signs": [],
+        "driveways": [],
+        "speed_bumps": [],
+    }
     for mf in scenario.map_features:
-        if mf.WhichOneof("feature_data") != "lane":
-            continue
-        ln = mf.lane
-        poly = _polyline_to_xyz(ln.polyline)
-        if len(poly) < 2:
-            continue
-        out.append(
-            {
-                "id": int(mf.id),
-                "type": WAYMO_LANE_TYPE.get(int(ln.type), "UNDEFINED"),
-                "speed_limit_kmh": _lane_speed_kmh(ln),
-                "centerline": [
-                    [p[0] - ox, p[1] - oy, p[2] - oz] for p in poly
-                ],
-                "entry_lanes": [int(x) for x in ln.entry_lanes],
-                "exit_lanes": [int(x) for x in ln.exit_lanes],
-            }
-        )
+        which = mf.WhichOneof("feature_data")
+        fid = int(mf.id)
+        if which == "lane":
+            ln = mf.lane
+            poly = _polyline_to_xyz(ln.polyline)
+            if len(poly) < 2:
+                continue
+            out["lanes"].append(
+                {
+                    "id": fid,
+                    "type": WAYMO_LANE_TYPE.get(int(ln.type), "UNDEFINED"),
+                    "speed_limit_kmh": _lane_speed_kmh(ln),
+                    "interpolating": bool(ln.interpolating),
+                    "centerline": _offset_polyline(poly, ox, oy, oz),
+                    "entry_lanes": [int(x) for x in ln.entry_lanes],
+                    "exit_lanes": [int(x) for x in ln.exit_lanes],
+                    "left_boundaries": _boundary_segments(ln.left_boundaries),
+                    "right_boundaries": _boundary_segments(ln.right_boundaries),
+                    "left_neighbors": _lane_neighbors(ln.left_neighbors),
+                    "right_neighbors": _lane_neighbors(ln.right_neighbors),
+                }
+            )
+        elif which == "road_line":
+            rl = mf.road_line
+            poly = _polyline_to_xyz(rl.polyline)
+            if len(poly) < 2:
+                continue
+            out["road_lines"].append(
+                {
+                    "id": fid,
+                    "type": WAYMO_ROAD_LINE_TYPE.get(int(rl.type), "TYPE_UNKNOWN"),
+                    "polyline": _offset_polyline(poly, ox, oy, oz),
+                }
+            )
+        elif which == "road_edge":
+            re = mf.road_edge
+            poly = _polyline_to_xyz(re.polyline)
+            if len(poly) < 2:
+                continue
+            out["road_edges"].append(
+                {
+                    "id": fid,
+                    "type": WAYMO_ROAD_EDGE_TYPE.get(int(re.type), "TYPE_UNKNOWN"),
+                    "polyline": _offset_polyline(poly, ox, oy, oz),
+                }
+            )
+        elif which == "crosswalk":
+            poly = _polyline_to_xyz(mf.crosswalk.polygon)
+            if len(poly) < 3:
+                continue
+            out["crosswalks"].append(
+                {"id": fid, "polygon": _offset_polyline(poly, ox, oy, oz)}
+            )
+        elif which == "stop_sign":
+            ss = mf.stop_sign
+            out["stop_signs"].append(
+                {
+                    "id": fid,
+                    "position": _offset_point3(ss.position, ox, oy, oz),
+                    "lanes": [int(x) for x in ss.lane],
+                }
+            )
+        elif which == "driveway":
+            poly = _polyline_to_xyz(mf.driveway.polygon)
+            if len(poly) < 3:
+                continue
+            out["driveways"].append(
+                {"id": fid, "polygon": _offset_polyline(poly, ox, oy, oz)}
+            )
+        elif which == "speed_bump":
+            poly = _polyline_to_xyz(mf.speed_bump.polygon)
+            if len(poly) < 3:
+                continue
+            out["speed_bumps"].append(
+                {"id": fid, "polygon": _offset_polyline(poly, ox, oy, oz)}
+            )
     return out
 
 
-def _scene_stats(scenario) -> Tuple[int, int, int, int, Tuple[float, float, float, float]]:
-    """统计：lanes / road_lines / road_edges / crosswalks 计数 + 整张图 XY bbox。"""
-    nl = nrl = nre = ncw = 0
+_MAP_KIND_KEYS = {
+    "lane": "lanes",
+    "road_line": "road_lines",
+    "road_edge": "road_edges",
+    "crosswalk": "crosswalks",
+    "stop_sign": "stop_signs",
+    "driveway": "driveways",
+    "speed_bump": "speed_bumps",
+}
+
+
+def _scene_stats(scenario) -> Tuple[Dict[str, int], Tuple[float, float, float, float]]:
+    """统计各 map feature 数量 + 整张图 XY bbox（局部坐标前，用全局坐标算 bbox）。"""
+    counts: Dict[str, int] = {v: 0 for v in _MAP_KIND_KEYS.values()}
     xs: List[float] = []
     ys: List[float] = []
     for mf in scenario.map_features:
         which = mf.WhichOneof("feature_data")
-        poly = []
+        key = _MAP_KIND_KEYS.get(which or "")
+        if not key:
+            continue
+        counts[key] += 1
+        poly: List[Tuple[float, float, float]] = []
         if which == "lane":
-            nl += 1
             poly = _polyline_to_xyz(mf.lane.polyline)
         elif which == "road_line":
-            nrl += 1
             poly = _polyline_to_xyz(mf.road_line.polyline)
         elif which == "road_edge":
-            nre += 1
             poly = _polyline_to_xyz(mf.road_edge.polyline)
-        elif which == "crosswalk":
-            ncw += 1
-            poly = _polyline_to_xyz(mf.crosswalk.polygon)
+        elif which in ("crosswalk", "driveway", "speed_bump"):
+            poly = _polyline_to_xyz(getattr(mf, which).polygon)
+        elif which == "stop_sign":
+            p = mf.stop_sign.position
+            xs.append(float(p.x))
+            ys.append(float(p.y))
+            continue
         for x, y, _ in poly:
             xs.append(x)
             ys.append(y)
@@ -174,7 +322,7 @@ def _scene_stats(scenario) -> Tuple[int, int, int, int, Tuple[float, float, floa
         bbox = (0.0, 0.0, 0.0, 0.0)
     else:
         bbox = (min(xs), min(ys), max(xs), max(ys))
-    return nl, nrl, nre, ncw, bbox
+    return counts, bbox
 
 
 def convert_scenario(scenario, center_on_sdc: bool = True) -> ConvertedScene:
@@ -203,11 +351,11 @@ def convert_scenario(scenario, center_on_sdc: bool = True) -> ConvertedScene:
     if goal_pose is not None:
         goal_pose = (goal_pose[0] - ox, goal_pose[1] - oy, goal_pose[2])
 
-    nl, nrl, nre, ncw, raw_bbox = _scene_stats(scenario)
+    map_counts, raw_bbox = _scene_stats(scenario)
     bbox = (raw_bbox[0] - ox, raw_bbox[1] - oy, raw_bbox[2] - ox, raw_bbox[3] - oy)
 
     tracks, counts = _extract_tracks(scenario, ox, oy, oz, sdc_idx)
-    lane_graph = _extract_lane_graph(scenario, ox, oy, oz)
+    static_map = _extract_static_map(scenario, ox, oy, oz)
 
     sid = scenario.scenario_id if scenario.HasField("scenario_id") else "unknown"
     timestamps = list(scenario.timestamps_seconds)
@@ -223,12 +371,9 @@ def convert_scenario(scenario, center_on_sdc: bool = True) -> ConvertedScene:
         sdc_track_index=sdc_idx,
         tracks=tracks,
         track_type_counts=counts,
-        lane_graph=lane_graph,
+        static_map=static_map,
         bbox=bbox,
-        num_lanes=nl,
-        num_road_lines=nrl,
-        num_road_edges=nre,
-        num_crosswalks=ncw,
+        map_feature_counts=map_counts,
     )
 
 
@@ -264,10 +409,7 @@ def write_meta(scene: ConvertedScene, path: Path, source: str, scenario_index: i
             "ymax": scene.bbox[3],
         },
         "stats": {
-            "lanes": scene.num_lanes,
-            "road_lines": scene.num_road_lines,
-            "road_edges": scene.num_road_edges,
-            "crosswalks": scene.num_crosswalks,
+            **dict(scene.map_feature_counts),
             "timestamps": len(scene.timestamps_seconds),
             "duration_s": duration,
             "current_time_index": scene.current_time_index,
@@ -308,7 +450,8 @@ def write_lane_graph(scene: ConvertedScene, path: Path, source: str) -> None:
             "y": scene.world_offset[1],
             "z": scene.world_offset[2],
         },
-        "lanes": scene.lane_graph,
+        "map_feature_counts": dict(scene.map_feature_counts),
+        **scene.static_map,
     }
     with open(path, "w", encoding="utf-8") as f:
         json.dump(doc, f)
@@ -402,19 +545,22 @@ def main() -> int:
     write_dynamic_objects(scene, objs_path, source=str(tf_path))
     write_lane_graph(scene, graph_path, source=str(tf_path))
 
-    print(f"[converter] features: lanes={scene.num_lanes} "
-          f"road_lines={scene.num_road_lines} road_edges={scene.num_road_edges} "
-          f"crosswalks={scene.num_crosswalks}")
+    mc = scene.map_feature_counts
+    print(
+        f"[converter] static_map: lanes={mc.get('lanes', 0)} "
+        f"road_lines={mc.get('road_lines', 0)} road_edges={mc.get('road_edges', 0)} "
+        f"crosswalks={mc.get('crosswalks', 0)} stop_signs={mc.get('stop_signs', 0)} "
+        f"driveways={mc.get('driveways', 0)} speed_bumps={mc.get('speed_bumps', 0)}"
+    )
     print(f"[converter] tracks: total={len(scene.tracks)} "
           f"non_sdc_by_type={dict(scene.track_type_counts)} "
           f"timestamps={len(scene.timestamps_seconds)}")
-    print(f"[converter] lane_graph: lanes={len(scene.lane_graph)}")
+    print(f"[converter] lane_graph.json: lanes exported={len(scene.static_map.get('lanes', []))}")
     print(f"[converter] init_pose = {scene.init_pose}")
     print(f"[converter] goal_pose = {scene.goal_pose}")
     print(f"[converter] wrote {meta_path}")
     print(f"[converter] wrote {objs_path}")
     print(f"[converter] wrote {graph_path}")
-    return 0
 
 
 if __name__ == "__main__":

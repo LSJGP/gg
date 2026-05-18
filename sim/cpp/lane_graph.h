@@ -5,29 +5,23 @@
 #include <tuple>
 #include <vector>
 
-#include "cpp/planner.h"
-#include "cpp/types.h"
+#include "proto/sim/map.pb.h"
+#include "proto/sim/runtime.pb.h"
+#include "proto/sim/scenario.pb.h"
 
 namespace hyw_sim {
-
-struct Lane {
-  int64_t id = 0;
-  std::string type = "UNDEFINED";
-  double speed_limit_kmh = 50.0;
-  std::vector<std::tuple<double, double, double>> centerline;
-  std::vector<int64_t> entry_lanes;
-  std::vector<int64_t> exit_lanes;
-};
 
 class LaneGraph {
  public:
   static bool LoadFromFile(const std::string& path, LaneGraph* out, std::string* error);
 
-  const Lane* FindLane(int64_t id) const;
+  explicit LaneGraph(proto::StaticMap map);
 
-  const Lane* ClosestLane(double x, double y, double heading,
-                          bool has_heading = true,
-                          double max_heading_diff = 1.5707963268) const;
+  const proto::Lane* FindLane(int64_t id) const;
+
+  const proto::Lane* ClosestLane(double x, double y, double heading,
+                                 bool has_heading = true,
+                                 double max_heading_diff = 1.5707963268) const;
 
   std::vector<int64_t> ShortestPath(int64_t start_id, int64_t goal_id) const;
 
@@ -37,23 +31,19 @@ class LaneGraph {
   double SpeedLimitMps(const std::vector<int64_t>& lane_ids,
                        double default_kmh = 50.0) const;
 
-  size_t LaneCount() const { return lanes_.size(); }
+  size_t LaneCount() const { return static_cast<size_t>(map_.lanes_size()); }
+
+  const proto::StaticMap& map() const { return map_; }
 
  private:
-  std::vector<Lane> lanes_;
+  proto::StaticMap map_;
 };
 
-struct MapRouteResult {
-  std::vector<ReferencePoint> reference_points;
-  double speed_limit_mps = 13.9;
-  std::vector<int64_t> route_lane_ids;
-};
-
-/// Build reference polyline from lane_graph (init→goal). Fails on routing errors.
-bool BuildMapReference(const Scenario& scenario, const LaneGraph& graph,
-                       double reference_step, MapRouteResult* out,
+bool BuildMapReference(const proto::ScenarioMeta& meta, const LaneGraph& graph,
+                       double reference_step, proto::MapRouteResult* out,
                        std::string* error);
 
-std::vector<ReferencePoint> BuildSdcReference(const Scenario& scenario);
+std::vector<proto::ReferencePoint> BuildSdcReference(
+    const proto::DynamicObjects& dynamic);
 
 }  // namespace hyw_sim
