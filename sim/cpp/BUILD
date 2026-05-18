@@ -1,4 +1,11 @@
 load("@rules_cc//cc:defs.bzl", "cc_binary", "cc_library")
+load("@hedron_compile_commands//:refresh_compile_commands.bzl", "refresh_compile_commands")
+
+refresh_compile_commands(
+    name = "refresh_compile_commands",
+    # 可选：如果你想限定只为特定的 target 生成，可以取消下面这行的注释并填入 targets
+    # targets = ["//my_package:my_target"],
+)
 
 cc_library(
     name = "json_utils",

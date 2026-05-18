@@ -51,13 +51,19 @@ cc_proto_library(
     visibility = ["//visibility:public"],
 )
 
+proto_library(
+    name = "sim_proto",
+    srcs = ["sim.proto"],
+    deps = [
+        ":common_proto",     # 依赖基础的 proto_library
+        ":map_proto",
+        ":runtime_proto",
+        ":scenario_proto",
+    ],
+)
+
 cc_proto_library(
     name = "sim_cc_proto",
-    deps = [
-        ":common_cc_proto",
-        ":map_cc_proto",
-        ":runtime_cc_proto",
-        ":scenario_cc_proto",
-    ],
+    deps = [":sim_proto"],   # <--- 这里只能写 proto_library
     visibility = ["//visibility:public"],
 )
