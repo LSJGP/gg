@@ -5,9 +5,9 @@
 
 namespace grading_mini {
 
-// Counts collision events emitted by the simulator and classifies them by
-// regulatory exemption. The metric PASSES only if there is no non-exempt
-// collision over the whole run. Exempt examples (encoded in CollisionEvent):
+// Detects NPC–ego OBB overlap from MetricFrameInput and classifies regulatory
+// exemption. The metric PASSES only if there is no non-exempt collision over
+// the whole run. Exempt examples:
 //   - rear_end_on_slow_ego : NPC rear-ends a stationary / slow ego
 //   - forced_cut_in        : NPC laterally enters ego's lane
 //   - wrong_way_head_on    : NPC approaches head-on in the wrong direction

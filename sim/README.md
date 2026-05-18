@@ -5,6 +5,8 @@
 1. 读取 Waymo 导出的 JSON 场景（`scenario_meta` / `dynamic_objects` / `lane_graph`）；
 2. 在 C++ world loop 中执行 planner、车辆模型、OBB/SAT 碰撞与豁免分类；
 3. 每帧将 `MetricFrameInput` JSON **入队**，由后台线程写入 `grading_main --stream` 的 stdin（仿真线程不等待 pipe / grading 速度；`Run` 结束后 `Finish` 会排空队列并关闭管道）。
+
+场景与运行时数据由 `sim/proto/sim/*.proto` 定义；磁盘上仍为三个 JSON 文件（`JsonStringToMessage` 加载，`lane_graph` 折线 `[[x,y,z],...]` 经 `proto_io` 转换）。
 4. 同时落盘 `sim_log.json`，可用于离线 batch 评分。
 
 `run_sim.py` 仍保留为兼容入口，但内部会调用 C++ `sim_runner`。  

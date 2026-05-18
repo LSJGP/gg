@@ -1,17 +1,20 @@
 load("@rules_cc//cc:defs.bzl", "cc_binary", "cc_library")
 
 cc_library(
-    name = "types",
-    hdrs = ["types.h"],
-    visibility = ["//visibility:public"],
-)
-
-cc_library(
     name = "json_utils",
     srcs = ["json_utils.cc"],
     hdrs = ["json_utils.h"],
+    deps = ["@com_google_protobuf//:protobuf"],
+)
+
+cc_library(
+    name = "proto_io",
+    srcs = ["proto_io.cc"],
+    hdrs = ["proto_io.h"],
     deps = [
-        ":types",
+        ":json_utils",
+        "//proto/sim:map_cc_proto",
+        "//proto/sim:scenario_cc_proto",
         "@com_google_protobuf//:protobuf",
     ],
 )
@@ -21,8 +24,9 @@ cc_library(
     srcs = ["scenario_loader.cc"],
     hdrs = ["scenario_loader.h"],
     deps = [
-        ":json_utils",
-        ":types",
+        ":proto_io",
+        "//proto/sim:map_cc_proto",
+        "//proto/sim:scenario_cc_proto",
     ],
 )
 
@@ -30,7 +34,37 @@ cc_library(
     name = "geometry",
     srcs = ["geometry.cc"],
     hdrs = ["geometry.h"],
-    deps = [":types"],
+)
+
+cc_library(
+    name = "lane_graph",
+    srcs = ["lane_graph.cc"],
+    hdrs = ["lane_graph.h"],
+    deps = [
+        ":proto_io",
+        "//proto/sim:map_cc_proto",
+        "//proto/sim:runtime_cc_proto",
+        "//proto/sim:scenario_cc_proto",
+    ],
+)
+
+cc_library(
+    name = "map_query",
+    srcs = ["map_query.cc"],
+    hdrs = ["map_query.h"],
+    deps = [
+        ":lane_graph",
+        "//proto/sim:runtime_cc_proto",
+    ],
+)
+
+cc_library(
+    name = "trajectory_tracker",
+    srcs = ["trajectory_tracker.cc"],
+    hdrs = ["trajectory_tracker.h"],
+    deps = [
+        "//proto/sim:runtime_cc_proto",
+    ],
 )
 
 cc_library(
@@ -39,7 +73,8 @@ cc_library(
     hdrs = ["planner.h"],
     deps = [
         ":geometry",
-        ":types",
+        ":trajectory_tracker",
+        "//proto/sim:runtime_cc_proto",
     ],
 )
 
@@ -48,9 +83,23 @@ cc_library(
     srcs = ["world.cc"],
     hdrs = ["world.h"],
     deps = [
-        ":geometry",
+        ":lane_graph",
+        ":map_query",
         ":planner",
-        ":types",
+        ":trajectory_tracker",
+        "//proto/sim:runtime_cc_proto",
+        "//proto/sim:scenario_cc_proto",
+    ],
+)
+
+cc_library(
+    name = "grading_convert",
+    srcs = ["grading_convert.cc"],
+    hdrs = ["grading_convert.h"],
+    deps = [
+        "//proto/sim:map_cc_proto",
+        "//proto/sim:runtime_cc_proto",
+        "@grading_mini//proto/grading:metric_input_cc_proto",
     ],
 )
 
@@ -58,7 +107,14 @@ cc_library(
     name = "grading_bridge",
     srcs = ["grading_bridge.cc"],
     hdrs = ["grading_bridge.h"],
-    deps = [":types"],
+    deps = [
+        ":grading_convert",
+        "//proto/sim:map_cc_proto",
+        "//proto/sim:runtime_cc_proto",
+        "@com_google_protobuf//:protobuf",
+        "@grading_mini//proto/grading:metric_input_cc_proto",
+        "@grading_mini//proto/grading:sim_log_cc_proto",
+    ],
 )
 
 cc_library(
@@ -66,7 +122,7 @@ cc_library(
     srcs = ["sim_logger.cc"],
     hdrs = ["sim_logger.h"],
     deps = [
-        ":types",
+        "//proto/sim:runtime_cc_proto",
         "@com_github_gabime_spdlog//:spdlog",
     ],
 )
@@ -76,10 +132,11 @@ cc_binary(
     srcs = ["main.cc"],
     deps = [
         ":grading_bridge",
+        ":lane_graph",
         ":planner",
         ":scenario_loader",
         ":sim_logger",
-        ":types",
         ":world",
+        "//proto/sim:runtime_cc_proto",
     ],
 )

@@ -1,0 +1,122 @@
+syntax = "proto3";
+
+package hyw_sim.proto;
+
+import "proto/sim/common.proto";
+
+message ReferencePoint {
+  double x = 1;
+  double y = 2;
+  double heading = 3;
+  double speed = 4;
+  bool valid = 5;
+}
+
+message VehicleParams {
+  double length = 1;
+  double width = 2;
+  double wheelbase = 3;
+  double rear_overhang = 4;
+  double max_speed = 5;
+  double max_accel = 6;
+  double max_decel = 7;
+  double max_steer = 8;
+  double max_steer_rate = 9;
+}
+
+message VehicleState {
+  double x = 1;
+  double y = 2;
+  double heading = 3;
+  double speed = 4;
+  double acceleration = 5;
+  double steer = 6;
+}
+
+message PlanCommand {
+  double target_acceleration = 1;
+  double steering_angle = 2;
+  double desired_speed_mps = 3;
+}
+
+message NpcSnapshot {
+  int64 id = 1;
+  string object_type = 2;
+  double x = 3;
+  double y = 4;
+  double z = 5;
+  double heading = 6;
+  double vx = 7;
+  double vy = 8;
+  double length = 9;
+  double width = 10;
+  double height = 11;
+}
+
+message RoadContext {
+  double dist_to_left_boundary_m = 1;
+  double dist_to_right_boundary_m = 2;
+  double dist_to_road_edge_m = 3;
+  int64 closest_lane_id = 4;
+  double lateral_offset_m = 5;
+}
+
+message TrajectoryPoint {
+  double t_s = 1;
+  double x = 2;
+  double y = 3;
+  double heading = 4;
+  double speed = 5;
+  double target_acceleration = 6;
+  double steering_angle = 7;
+  double desired_speed_mps = 8;
+}
+
+message PlannerTrajectory {
+  repeated TrajectoryPoint points = 1;
+}
+
+message PlannerConfig {
+  double horizon_s = 1;
+  double point_dt_s = 2;
+}
+
+message PlannerObservation {
+  int64 frame_id = 1;
+  int64 timestamp_us = 2;
+  double dt = 3;
+  VehicleState ego = 4;
+  repeated NpcSnapshot npcs = 5;
+  RoadContext road = 6;
+}
+
+message FrameRecord {
+  int64 frame_id = 1;
+  int64 timestamp_us = 2;
+  VehicleState ego = 3;
+  PlanCommand command = 4;
+  int32 num_npcs = 5;
+  repeated NpcSnapshot npcs = 6;
+  RoadContext road = 7;
+  PlannerTrajectory planned_trajectory = 8;
+}
+
+message WorldConfig {
+  double dt = 1;
+  double max_seconds = 2;
+  double initial_ego_speed_mps = 3;
+}
+
+message PlannerInputs {
+  Pose2D goal = 1;
+  double desired_speed_mps = 2;
+  repeated ReferencePoint reference_points = 3;
+  VehicleParams ego_vehicle = 4;
+  PlannerConfig trajectory_config = 5;
+}
+
+message MapRouteResult {
+  repeated ReferencePoint reference_points = 1;
+  double speed_limit_mps = 2;
+  repeated int64 route_lane_ids = 3;
+}

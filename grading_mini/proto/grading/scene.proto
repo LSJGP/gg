@@ -1,0 +1,51 @@
+syntax = "proto3";
+
+package grading_mini.proto;
+
+message Vec3 {
+  double x = 1;
+  double y = 2;
+  double z = 3;
+}
+
+message BoundarySegment {
+  int32 lane_start_index = 1;
+  int32 lane_end_index = 2;
+  int64 boundary_feature_id = 3;
+  string boundary_type = 4;
+}
+
+message Lane {
+  int64 id = 1;
+  string type = 2;
+  double speed_limit_kmh = 3;
+  repeated Vec3 centerline = 4;
+  repeated BoundarySegment left_boundaries = 5;
+  repeated BoundarySegment right_boundaries = 6;
+}
+
+message RoadLine {
+  int64 id = 1;
+  string type = 2;
+  repeated Vec3 polyline = 3;
+}
+
+message RoadEdge {
+  int64 id = 1;
+  string type = 2;
+  repeated Vec3 polyline = 3;
+}
+
+message Crosswalk {
+  int64 id = 1;
+  repeated Vec3 polygon = 2;
+}
+
+message SceneMap {
+  string source = 1;
+  string scenario_id = 2;
+  repeated Lane lanes = 3;
+  repeated RoadLine road_lines = 4;
+  repeated RoadEdge road_edges = 5;
+  repeated Crosswalk crosswalks = 6;
+}

@@ -1,8 +1,21 @@
 load("@rules_cc//cc:defs.bzl", "cc_proto_library")
 
 proto_library(
+    name = "scene_proto",
+    srcs = ["scene.proto"],
+    visibility = ["//visibility:public"],
+)
+
+cc_proto_library(
+    name = "scene_cc_proto",
+    deps = [":scene_proto"],
+    visibility = ["//visibility:public"],
+)
+
+proto_library(
     name = "metric_input_proto",
     srcs = ["metric_input.proto"],
+    deps = [":scene_proto"],
     visibility = ["//visibility:public"],
 )
 

@@ -5,7 +5,7 @@
 #include <string>
 #include <string_view>
 
-#include "cpp/types.h"
+#include "proto/sim/runtime.pb.h"
 
 namespace spdlog {
 class logger;
@@ -17,7 +17,6 @@ enum class SimLogLevel { kTrace = 0, kDebug, kInfo, kWarn, kError, kOff };
 
 SimLogLevel ParseSimLogLevel(std::string_view s);
 
-/// spdlog-backed file log under `--log-dir` (e.g. `sim_YYYYMMDD_HHMMSS.log`).
 class SimFileLogger {
  public:
   SimFileLogger() = default;
@@ -25,14 +24,12 @@ class SimFileLogger {
   SimFileLogger& operator=(const SimFileLogger&) = delete;
   ~SimFileLogger();
 
-  /// Creates `log_dir` and opens `sim_YYYYMMDD_HHMMSS.log`. Returns false on failure or
-  /// when `min_level` is `kOff`.
   bool Open(const std::filesystem::path& log_dir, SimLogLevel min_level);
 
   void Log(SimLogLevel level, std::string_view message,
            std::string_view json_data_object = "{}");
 
-  void LogFrame(SimLogLevel level, const FrameRecord& frame);
+  void LogFrame(SimLogLevel level, const proto::FrameRecord& frame);
 
   bool IsOpen() const { return open_; }
 

@@ -8,15 +8,21 @@
 #include <vector>
 
 #include "cpp/grading_bridge.h"
+#include "cpp/lane_graph.h"
 #include "cpp/planner.h"
 #include "cpp/scenario_loader.h"
 #include "cpp/sim_logger.h"
-#include "cpp/types.h"
 #include "cpp/world.h"
 
 namespace fs = std::filesystem;
 
 namespace {
+
+// Defaults aligned with pysim/waymo_sim/vehicle.py VehicleParams.
+constexpr double kEgoMaxAccelMps2 = 2.5;
+constexpr double kEgoMaxDecelMps2 = 6.0;
+constexpr double kEgoMaxSteerRad = 35.0 * M_PI / 180.0;
+constexpr double kEgoMaxSteerRateRadPerS = 180.0 * M_PI / 180.0;
 
 struct Args {
   std::string scenario_dir;
@@ -25,8 +31,9 @@ struct Args {
   std::string source_tag = "waymo_sim_cpp";
   double dt = 0.1;
   double max_seconds = 0.0;
-  bool stop_on_collision = false;
-  std::string planner = "reference_tracker";
+  std::string planner = "local_dwa";
+  std::string reference_source = "map";
+  double reference_step = 1.0;
   double desired_speed = 13.9;
   double ego_length = 4.5;
   double ego_width = 1.85;
@@ -47,8 +54,9 @@ void PrintUsage(const char* argv0) {
       << "  --output <path>\n"
       << "  --dt <seconds>\n"
       << "  --max-seconds <seconds>\n"
-      << "  --stop-on-collision\n"
-      << "  --planner <name>\n"
+      << "  --planner <name>  (default: local_dwa)\n"
+      << "  --reference-source <map|sdc>  (default: map)\n"
+      << "  --reference-step <meters>  (default: 1.0, map mode)\n"
       << "  --desired-speed <mps>\n"
       << "  --grading-bin <path-to-grading_main>\n"
       << "  --grading-report <report-path>\n"
@@ -78,10 +86,12 @@ bool ParseArgs(int argc, char** argv, Args* args) {
       args->dt = std::stod(next("--dt"));
     } else if (k == "--max-seconds") {
       args->max_seconds = std::stod(next("--max-seconds"));
-    } else if (k == "--stop-on-collision") {
-      args->stop_on_collision = true;
     } else if (k == "--planner") {
       args->planner = next("--planner");
+    } else if (k == "--reference-source") {
+      args->reference_source = next("--reference-source");
+    } else if (k == "--reference-step") {
+      args->reference_step = std::stod(next("--reference-step"));
     } else if (k == "--desired-speed") {
       args->desired_speed = std::stod(next("--desired-speed"));
     } else if (k == "--ego-length") {
@@ -116,6 +126,20 @@ bool ParseArgs(int argc, char** argv, Args* args) {
   return !args->scenario_dir.empty();
 }
 
+hyw_sim::proto::VehicleParams MakeVehicleParams(const Args& args) {
+  hyw_sim::proto::VehicleParams params;
+  params.set_length(args.ego_length);
+  params.set_width(args.ego_width);
+  params.set_wheelbase(args.ego_wheelbase);
+  params.set_rear_overhang(args.ego_rear_overhang);
+  params.set_max_speed(args.ego_max_speed);
+  params.set_max_accel(kEgoMaxAccelMps2);
+  params.set_max_decel(kEgoMaxDecelMps2);
+  params.set_max_steer(kEgoMaxSteerRad);
+  params.set_max_steer_rate(kEgoMaxSteerRateRadPerS);
+  return params;
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -131,57 +155,66 @@ int main(int argc, char** argv) {
     return 1;
   }
 
-  hyw_sim::Scenario scenario;
+  hyw_sim::ScenarioBundle bundle;
   std::string err;
-  if (!hyw_sim::LoadScenarioFromDir(args.scenario_dir, &scenario, &err)) {
+  if (!hyw_sim::LoadScenarioFromDir(args.scenario_dir, &bundle, &err)) {
     std::cerr << "[sim_cpp] failed loading scenario: " << err << "\n";
     return 2;
   }
 
-  hyw_sim::VehicleParams params;
-  params.length = args.ego_length;
-  params.width = args.ego_width;
-  params.wheelbase = args.ego_wheelbase;
-  params.rear_overhang = args.ego_rear_overhang;
-  params.max_speed = args.ego_max_speed;
+  const hyw_sim::proto::VehicleParams params = MakeVehicleParams(args);
 
-  std::vector<hyw_sim::ReferencePoint> reference_points;
-  size_t max_steps = scenario.timestamps_seconds.size();
-  const hyw_sim::Track* sdc_track = nullptr;
-  for (const auto& tr : scenario.tracks) {
-    if (tr.is_sdc ||
-        (scenario.sdc_track_index >= 0 && tr.track_index == scenario.sdc_track_index)) {
-      sdc_track = &tr;
+  hyw_sim::LaneGraph lane_graph(std::move(bundle.map));
+
+  hyw_sim::proto::PlannerInputs planner_inputs;
+  *planner_inputs.mutable_goal() = bundle.meta.goal_pose();
+  planner_inputs.mutable_trajectory_config()->set_horizon_s(3.0);
+  planner_inputs.mutable_trajectory_config()->set_point_dt_s(args.dt);
+  double route_speed_mps = args.desired_speed;
+
+  if (args.reference_source == "map") {
+    hyw_sim::proto::MapRouteResult route;
+    if (!hyw_sim::BuildMapReference(bundle.meta, lane_graph, args.reference_step,
+                                    &route, &err)) {
+      std::cerr << "[sim_cpp] fail: " << err << "\n";
+      return 2;
+    }
+    planner_inputs.mutable_reference_points()->CopyFrom(route.reference_points());
+    route_speed_mps = route.speed_limit_mps();
+    std::cout << "[sim_cpp] route: " << route.route_lane_ids_size() << " lanes, "
+              << route.reference_points_size() << " ref points, limit="
+              << (route_speed_mps * 3.6) << " km/h\n";
+  } else if (args.reference_source == "sdc") {
+    const auto sdc_ref = hyw_sim::BuildSdcReference(bundle.dynamic);
+    if (sdc_ref.empty()) {
+      std::cerr << "[sim_cpp] fail: no SDC track for --reference-source sdc\n";
+      return 2;
+    }
+    planner_inputs.mutable_reference_points()->Clear();
+    for (const auto& rp : sdc_ref) {
+      *planner_inputs.mutable_reference_points()->Add() = rp;
+    }
+    std::cout << "[sim_cpp] reference: SDC track (" << sdc_ref.size()
+              << " points)\n";
+  } else {
+    std::cerr << "[sim_cpp] fail: unknown --reference-source "
+              << args.reference_source << " (use map or sdc)\n";
+    return 2;
+  }
+
+  planner_inputs.set_desired_speed_mps(
+      std::min(args.desired_speed, route_speed_mps));
+  *planner_inputs.mutable_ego_vehicle() = params;
+
+  double initial_ego_speed_mps = 0.0;
+  for (const auto& rp : planner_inputs.reference_points()) {
+    if (rp.valid() && rp.speed() > 0.5) {
+      initial_ego_speed_mps =
+          std::min(params.max_speed(), std::max(1.0, 0.35 * rp.speed()));
       break;
     }
   }
-  if (sdc_track != nullptr && !sdc_track->states.empty()) {
-    max_steps = std::max(max_steps, sdc_track->states.size());
-    reference_points.assign(max_steps, hyw_sim::ReferencePoint{});
-    hyw_sim::ReferencePoint last_valid;
-    bool has_last_valid = false;
-    for (size_t i = 0; i < max_steps; ++i) {
-      if (i < sdc_track->states.size() && sdc_track->states[i].valid) {
-        const auto& st = sdc_track->states[i];
-        hyw_sim::ReferencePoint rp;
-        rp.x = st.x;
-        rp.y = st.y;
-        rp.heading = st.yaw;
-        rp.speed = std::hypot(st.vx, st.vy);
-        rp.valid = true;
-        reference_points[i] = rp;
-        last_valid = rp;
-        has_last_valid = true;
-      } else if (has_last_valid) {
-        reference_points[i] = last_valid;
-      }
-    }
-  }
-  hyw_sim::PlannerInputs planner_inputs;
-  planner_inputs.goal = scenario.goal_pose;
-  planner_inputs.desired_speed_mps = args.desired_speed;
-  planner_inputs.reference_points = std::move(reference_points);
-  planner_inputs.ego_vehicle = params;
+
   auto planner = hyw_sim::CreatePlanner(args.planner, planner_inputs, &err);
   if (!planner) {
     std::cerr << "[sim_cpp] failed to create planner: " << err << "\n";
@@ -210,12 +243,12 @@ int main(int argc, char** argv) {
     }
   }
 
-  hyw_sim::WorldConfig cfg;
-  cfg.dt = args.dt;
-  cfg.max_seconds = args.max_seconds;
-  cfg.stop_on_collision = args.stop_on_collision;
+  hyw_sim::proto::WorldConfig cfg;
+  cfg.set_dt(args.dt);
+  cfg.set_max_seconds(args.max_seconds);
+  cfg.set_initial_ego_speed_mps(initial_ego_speed_mps);
 
-  hyw_sim::WorldSimulator world(scenario, params);
+  hyw_sim::WorldSimulator world(bundle.meta, bundle.dynamic, lane_graph, params);
 
   hyw_sim::StreamPipeWriter stream_writer;
   const bool enable_online =
@@ -236,14 +269,14 @@ int main(int argc, char** argv) {
   fs::create_directories(fs::path(report_path).parent_path(), mk_ec);
   if (enable_online) {
     if (!stream_writer.Start(args.grading_bin, report_path, args.metrics_config,
-                             &err)) {
+                             &lane_graph.map(), params, &err)) {
       std::cerr << "[sim_cpp] failed to start grading stream: " << err << "\n";
       return 3;
     }
   }
 
-  const std::function<void(const hyw_sim::FrameRecord&)> stream_hook =
-      [&](const hyw_sim::FrameRecord& fr) { stream_writer.EnqueueFrame(fr); };
+  const std::function<void(const hyw_sim::proto::FrameRecord&)> stream_hook =
+      [&](const hyw_sim::proto::FrameRecord& fr) { stream_writer.EnqueueFrame(fr); };
 
   const auto records = world.Run(
       *planner, cfg,
@@ -266,7 +299,8 @@ int main(int argc, char** argv) {
     sim_logger.Log(hyw_sim::SimLogLevel::kInfo, "simulation_done", se.str());
   }
 
-  if (!hyw_sim::WriteSimLogJson(args.output, args.source_tag, records, &err)) {
+  if (!hyw_sim::WriteSimLogJson(args.output, args.source_tag, records, lane_graph.map(),
+                                params, &err)) {
     std::cerr << "[sim_cpp] failed writing simlog: " << err << "\n";
     return 5;
   }

@@ -2,24 +2,21 @@ syntax = "proto3";
 
 package grading_mini.proto;
 
+import "proto/grading/scene.proto";
+
 message VehicleState {
   double x = 1;
   double y = 2;
   double heading = 3;
   double speed = 4;
   double acceleration = 5;
+  double steer = 6;
 }
 
 message PlanningCommand {
   double desired_speed_mps = 1;
 }
 
-// Ground-truth collision event emitted by the simulator (not the planner).
-// `kind` is one of:
-//   "ego_front_into_npc"  ego rear-ends / drives into NPC ahead
-//   "npc_rear_into_ego"   NPC rear-ends ego from behind
-//   "side_collision"      lateral overlap (cut-in, side-swipe, t-bone)
-// `exempt`/`exempt_reason` encode regulatory liability assignment.
 message CollisionEvent {
   bool collided = 1;
   int64 other_id = 2;
@@ -32,10 +29,44 @@ message CollisionEvent {
   double approach_angle_deg = 9;
 }
 
+message NpcState {
+  int64 id = 1;
+  string object_type = 2;
+  double x = 3;
+  double y = 4;
+  double z = 5;
+  double heading = 6;
+  double vx = 7;
+  double vy = 8;
+  double length = 9;
+  double width = 10;
+  double height = 11;
+}
+
+message RoadContext {
+  double dist_to_left_boundary_m = 1;
+  double dist_to_right_boundary_m = 2;
+  double dist_to_road_edge_m = 3;
+  int64 closest_lane_id = 4;
+  double lateral_offset_m = 5;
+}
+
+message EgoVehicleParams {
+  double length = 1;
+  double width = 2;
+  double wheelbase = 3;
+  double rear_overhang = 4;
+}
+
 message MetricFrameInput {
   int64 frame_id = 1;
   int64 timestamp_us = 2;
   VehicleState vehicle_state = 3;
   optional PlanningCommand planning_command = 4;
   optional CollisionEvent collision_event = 5;
+
+  repeated NpcState npcs = 6;
+  optional SceneMap scene_map = 7;
+  optional EgoVehicleParams ego_vehicle = 8;
+  optional RoadContext road_context = 9;
 }

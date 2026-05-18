@@ -40,3 +40,7 @@ http_archive(
 
 load("@hedron_compile_commands//:workspace_setup.bzl", "hedron_compile_commands_setup")
 hedron_compile_commands_setup()
+local_repository(
+    name = "grading_mini",
+    path = "../grading_mini",
+)
