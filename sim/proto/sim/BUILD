@@ -51,7 +51,6 @@ cc_proto_library(
     visibility = ["//visibility:public"],
 )
 
-<<<<<<< HEAD
 proto_library(
     name = "sim_proto",
     srcs = ["sim.proto"],
@@ -68,5 +67,3 @@ cc_proto_library(
     deps = [":sim_proto"],   # <--- 这里只能写 proto_library
     visibility = ["//visibility:public"],
 )
-=======
->>>>>>> origin/dev
