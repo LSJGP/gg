@@ -1,0 +1,9 @@
+# Use repo-root compile_commands.json (merged by tools/merge_compile_commands.py).
+# Regenerate: ./tools/refresh_ide_compile_commands.sh
+
+CompileFlags:
+  Add:
+    - -std=c++17
+
+Diagnostics:
+  Suppress: ["pp_file_not_found"]

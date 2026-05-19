@@ -51,13 +51,3 @@ cc_proto_library(
     visibility = ["//visibility:public"],
 )
 
-cc_proto_library(
-    name = "sim_cc_proto",
-    deps = [
-        ":common_cc_proto",
-        ":map_cc_proto",
-        ":runtime_cc_proto",
-        ":scenario_cc_proto",
-    ],
-    visibility = ["//visibility:public"],
-)
