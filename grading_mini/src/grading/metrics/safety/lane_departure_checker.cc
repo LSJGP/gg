@@ -2,12 +2,59 @@
 
 #include "proto/grading/metrics/safety_metric.pb.h"
 #include "spdlog/spdlog.h"
-#include "src/grading/geometry.h"
 
+#include <array>
 #include <cmath>
 #include <limits>
 
 namespace grading_mini {
+namespace {
+
+struct Obb2D {
+  double cx = 0.0;
+  double cy = 0.0;
+  double heading = 0.0;
+  double half_length = 0.0;
+  double half_width = 0.0;
+};
+
+std::array<std::array<double, 2>, 4> ObbCorners(const Obb2D& box) {
+  const double c = std::cos(box.heading);
+  const double s = std::sin(box.heading);
+  const double l = box.half_length;
+  const double w = box.half_width;
+  std::array<std::array<double, 2>, 4> out{};
+  const std::array<std::array<double, 2>, 4> local = {
+      std::array<double, 2>{l, w},
+      std::array<double, 2>{l, -w},
+      std::array<double, 2>{-l, -w},
+      std::array<double, 2>{-l, w},
+  };
+  for (int i = 0; i < 4; ++i) {
+    const double lx = local[i][0];
+    const double ly = local[i][1];
+    out[i][0] = box.cx + c * lx - s * ly;
+    out[i][1] = box.cy + s * lx + c * ly;
+  }
+  return out;
+}
+
+double PointToSegmentDist(double px, double py, double x1, double y1, double x2,
+                          double y2) {
+  const double dx = x2 - x1;
+  const double dy = y2 - y1;
+  const double l2 = dx * dx + dy * dy;
+  if (l2 < 1e-12) {
+    return std::hypot(px - x1, py - y1);
+  }
+  const double t =
+      std::max(0.0, std::min(1.0, ((px - x1) * dx + (py - y1) * dy) / l2));
+  const double qx = x1 + t * dx;
+  const double qy = y1 + t * dy;
+  return std::hypot(px - qx, py - qy);
+}
+
+}  // namespace
 
 REGISTER_METRIC(LaneDepartureChecker, "lane_departure_checker");
 

@@ -7,7 +7,6 @@ cc_library(
     visibility = ["//visibility:public"],
     deps = [
         "//proto/grading:metric_input_cc_proto",
-        "//src/grading:collision_detector",
         "//src/grading:metric_base",
         "//src/grading:metric_register",
         "@com_google_absl//absl/status",
@@ -26,7 +25,6 @@ cc_library(
         "//proto/grading:metric_input_cc_proto",
         "//proto/grading:scene_cc_proto",
         "//proto/grading/metrics:safety_metric_cc_proto",
-        "//src/grading:geometry",
         "//src/grading:metric_base",
         "//src/grading:metric_register",
         "@com_google_absl//absl/status",

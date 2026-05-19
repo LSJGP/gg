@@ -13,24 +13,6 @@ cc_library(
 )
 
 cc_library(
-    name = "geometry",
-    srcs = ["geometry.cc"],
-    hdrs = ["geometry.h"],
-    visibility = ["//visibility:public"],
-)
-
-cc_library(
-    name = "collision_detector",
-    srcs = ["collision_detector.cc"],
-    hdrs = ["collision_detector.h"],
-    visibility = ["//visibility:public"],
-    deps = [
-        ":geometry",
-        "//proto/grading:metric_input_cc_proto",
-    ],
-)
-
-cc_library(
     name = "metric_base",
     srcs = ["metric_base.cc"],
     hdrs = ["metric_base.h"],
