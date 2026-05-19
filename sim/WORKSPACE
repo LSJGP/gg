@@ -47,6 +47,17 @@ http_archive(
     urls = ["https://github.com/fmtlib/fmt/archive/refs/tags/10.2.1.tar.gz"],
 )
 
+# Hedron's Compile Commands Extractor for Bazel
+# 建议去 GitHub 仓库获取最新的 commit hash 以替换下面的 URL 和 strip_prefix
+http_archive(
+    name = "hedron_compile_commands",
+    url = "https://github.com/hedronvision/bazel-compile-commands-extractor/archive/1e08f8e0507b6b6b1f4416a9a22cf5c28beaba93.tar.gz",
+    strip_prefix = "bazel-compile-commands-extractor-1e08f8e0507b6b6b1f4416a9a22cf5c28beaba93",
+)
+
+# 记载并运行工作区设置
+load("@hedron_compile_commands//:workspace_setup.bzl", "hedron_compile_commands_setup")
+hedron_compile_commands_setup()
 local_repository(
     name = "grading_mini",
     path = "../grading_mini",

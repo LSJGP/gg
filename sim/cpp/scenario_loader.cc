@@ -46,4 +46,4 @@ bool LoadScenarioFromDir(const std::string& scenario_dir, ScenarioBundle* out,
   return true;
 }
 
-}  // namespace hyw_sim
+} // namespace hyw_sim

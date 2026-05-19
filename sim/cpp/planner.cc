@@ -13,19 +13,21 @@
 namespace hyw_sim {
 namespace {
 
-using PlannerCreator = std::function<std::unique_ptr<Planner>(const proto::PlannerInputs&)>;
+using PlannerCreator =
+    std::function<std::unique_ptr<Planner>(const proto::PlannerInputs &)>;
 
-std::unordered_map<std::string, PlannerCreator>& Registry() {
-  static auto* registry = new std::unordered_map<std::string, PlannerCreator>();
+std::unordered_map<std::string, PlannerCreator> &Registry() {
+  static auto *registry = new std::unordered_map<std::string, PlannerCreator>();
   return *registry;
 }
 
-bool RegisterPlanner(const std::string& name, PlannerCreator creator) {
+bool RegisterPlanner(const std::string &name, PlannerCreator creator) {
   Registry()[name] = std::move(creator);
   return true;
 }
 
-proto::PlannerConfig DefaultTrajectoryConfig(const proto::PlannerInputs& inputs) {
+proto::PlannerConfig
+DefaultTrajectoryConfig(const proto::PlannerInputs &inputs) {
   if (inputs.has_trajectory_config()) {
     return inputs.trajectory_config();
   }
@@ -35,11 +37,13 @@ proto::PlannerConfig DefaultTrajectoryConfig(const proto::PlannerInputs& inputs)
   return cfg;
 }
 
-int ClosestValidRefIndex(const std::vector<proto::ReferencePoint>& ref, double x, double y) {
+int ClosestValidRefIndex(const std::vector<proto::ReferencePoint> &ref,
+                         double x, double y) {
   int best = -1;
   double best_d = 1e300;
   for (int i = 0; i < static_cast<int>(ref.size()); ++i) {
-    if (!ref[i].valid()) continue;
+    if (!ref[i].valid())
+      continue;
     const double d = std::hypot(ref[i].x() - x, ref[i].y() - y);
     if (d < best_d) {
       best_d = d;
@@ -49,35 +53,44 @@ int ClosestValidRefIndex(const std::vector<proto::ReferencePoint>& ref, double x
   return best;
 }
 
-bool RefTangent(const std::vector<proto::ReferencePoint>& ref, int i, double* tx, double* ty) {
-  if (i < 0 || i >= static_cast<int>(ref.size())) return false;
-  if (!ref[i].valid()) return false;
+// 【改进3：指针改引用】
+bool RefTangent(const std::vector<proto::ReferencePoint> &ref, int i,
+                double &tx, double &ty) {
+  if (i < 0 || i >= static_cast<int>(ref.size()))
+    return false;
+  if (!ref[i].valid())
+    return false;
   for (int j = i + 1; j < static_cast<int>(ref.size()); ++j) {
-    if (!ref[j].valid()) continue;
+    if (!ref[j].valid())
+      continue;
     const double dx = ref[j].x() - ref[i].x();
     const double dy = ref[j].y() - ref[i].y();
     const double len = std::hypot(dx, dy);
     if (len > 1e-6) {
-      *tx = dx / len;
-      *ty = dy / len;
+      tx = dx / len;
+      ty = dy / len;
       return true;
     }
   }
   const double h = ref[i].heading();
-  *tx = std::cos(h);
-  *ty = std::sin(h);
+  tx = std::cos(h);
+  ty = std::sin(h);
   return true;
 }
 
-void SimulateOneStep(proto::VehicleState* ego, double cmd_accel, double cmd_steer,
-                     double step_dt, const proto::VehicleParams& p) {
+// 【改进3：指针改引用】
+void SimulateOneStep(proto::VehicleState &ego, double cmd_accel,
+                     double cmd_steer, double step_dt,
+                     const proto::VehicleParams &p) {
   proto::PlanCommand cmd;
   cmd.set_target_acceleration(cmd_accel);
   cmd.set_steering_angle(cmd_steer);
-  StepVehicle(ego, cmd, step_dt, p);
+  // 注意：假设外接的 StepVehicle API 必须接收指针，所以这里取地址
+  StepVehicle(&ego, cmd, step_dt, p);
 }
 
-OBB MakeEgoObb(const proto::VehicleState& ego, const proto::VehicleParams& p, double inflate = 0.0) {
+OBB MakeEgoObb(const proto::VehicleState &ego, const proto::VehicleParams &p,
+               double inflate = 0.0) {
   OBB ego_box;
   const double d = p.length() / 2.0 - p.rear_overhang();
   ego_box.cx = ego.x() + d * std::cos(ego.heading());
@@ -90,7 +103,7 @@ OBB MakeEgoObb(const proto::VehicleState& ego, const proto::VehicleParams& p, do
   return ego_box;
 }
 
-OBB MakeNpcObbAt(const proto::NpcSnapshot& n, double t_ahead, double inflate) {
+OBB MakeNpcObbAt(const proto::NpcSnapshot &n, double t_ahead, double inflate) {
   OBB npc_box;
   npc_box.cx = n.x() + n.vx() * t_ahead;
   npc_box.cy = n.y() + n.vy() * t_ahead;
@@ -102,22 +115,25 @@ OBB MakeNpcObbAt(const proto::NpcSnapshot& n, double t_ahead, double inflate) {
   return npc_box;
 }
 
-double LeaderLimitedSpeedDwa(const proto::VehicleState& ego,
-                             const std::vector<proto::NpcSnapshot>& npcs,
-                             double desired_speed_mps, const proto::VehicleParams& p) {
+double LeaderLimitedSpeedDwa(const proto::VehicleState &ego,
+                             const std::vector<proto::NpcSnapshot> &npcs,
+                             double desired_speed_mps,
+                             const proto::VehicleParams &p) {
   double safe_speed = desired_speed_mps;
   constexpr double kTimeHeadway = 1.2;
   constexpr double kMinGap = 2.5;
   const double ego_half = p.length() * 0.5 + 0.35;
-  for (const auto& n : npcs) {
+  for (const auto &n : npcs) {
     const double dx = n.x() - ego.x();
     const double dy = n.y() - ego.y();
     const double c = std::cos(-ego.heading());
     const double s = std::sin(-ego.heading());
     const double fx = c * dx - s * dy;
     const double fy = s * dx + c * dy;
-    if (fx < 0.0 || fx > 60.0) continue;
-    if (std::fabs(fy) > (1.8 + 0.5 * n.width())) continue;
+    if (fx < 0.0 || fx > 60.0)
+      continue;
+    if (std::fabs(fy) > (1.8 + 0.5 * n.width()))
+      continue;
     const double gap = std::max(0.1, fx - 0.5 * n.length() - ego_half);
     const double npc_speed = std::hypot(n.vx(), n.vy());
     if (gap < 6.0) {
@@ -131,28 +147,28 @@ double LeaderLimitedSpeedDwa(const proto::VehicleState& ego,
 }
 
 class ReferenceTrajectoryPlanner final : public Planner {
- public:
-  explicit ReferenceTrajectoryPlanner(const proto::PlannerInputs& inputs)
-      : goal_(inputs.goal()),
-        desired_speed_mps_(inputs.desired_speed_mps()),
-        reference_points_(inputs.reference_points().begin(), inputs.reference_points().end()),
-        p_(inputs.ego_vehicle()),
-        traj_cfg_(DefaultTrajectoryConfig(inputs)) {}
+public:
+  explicit ReferenceTrajectoryPlanner(const proto::PlannerInputs &inputs)
+      : goal_(inputs.goal()), desired_speed_mps_(inputs.desired_speed_mps()),
+        reference_points_(inputs.reference_points().begin(),
+                          inputs.reference_points().end()),
+        p_(inputs.ego_vehicle()), traj_cfg_(DefaultTrajectoryConfig(inputs)) {}
 
   std::string Name() const override { return "reference_tracker"; }
 
-  proto::PlannerTrajectory Plan(const proto::PlannerObservation& obs) const override {
+  proto::PlannerTrajectory
+  Plan(const proto::PlannerObservation &obs) const override {
     const auto cmd = PlanStep(obs.ego(), {obs.npcs().begin(), obs.npcs().end()},
                               obs.frame_id());
     return BuildTrajectoryFromCommand(cmd, obs.ego(), p_, traj_cfg_);
   }
 
- private:
-  proto::PlanCommand PlanStep(const proto::VehicleState& ego,
-                              const std::vector<proto::NpcSnapshot>& npcs,
+private:
+  proto::PlanCommand PlanStep(const proto::VehicleState &ego,
+                              const std::vector<proto::NpcSnapshot> &npcs,
                               int frame_id) const;
-  double ComputeLeaderLimitedSpeed(const proto::VehicleState& ego,
-                                   const std::vector<proto::NpcSnapshot>& npcs,
+  double ComputeLeaderLimitedSpeed(const proto::VehicleState &ego,
+                                   const std::vector<proto::NpcSnapshot> &npcs,
                                    double desired_speed_mps) const;
 
   proto::Pose2D goal_;
@@ -163,25 +179,29 @@ class ReferenceTrajectoryPlanner final : public Planner {
 };
 
 proto::PlanCommand ReferenceTrajectoryPlanner::PlanStep(
-    const proto::VehicleState& ego, const std::vector<proto::NpcSnapshot>& npcs,
+    const proto::VehicleState &ego, const std::vector<proto::NpcSnapshot> &npcs,
     int frame_id) const {
   proto::PlanCommand cmd;
+  constexpr double kStopDistance = 3.0;
+  constexpr double kGoalDeadzone = 1.0; // 【改进1】终点死区阈值
 
   int ref_idx = ClosestValidRefIndex(reference_points_, ego.x(), ego.y());
   if (ref_idx < 0 && !reference_points_.empty()) {
     const int idx = std::max(
         0, std::min(frame_id, static_cast<int>(reference_points_.size() - 1)));
-    if (reference_points_[idx].valid()) ref_idx = idx;
+    if (reference_points_[idx].valid())
+      ref_idx = idx;
   }
 
   double target_x = goal_.x();
   double target_y = goal_.y();
   double target_speed = desired_speed_mps_;
+
   if (ref_idx >= 0) {
     target_speed = std::min(desired_speed_mps_,
                             std::max(0.0, reference_points_[ref_idx].speed()));
-    const int look = std::min(
-        ref_idx + 15, static_cast<int>(reference_points_.size() - 1));
+    const int look =
+        std::min(ref_idx + 15, static_cast<int>(reference_points_.size() - 1));
     for (int j = look; j > ref_idx; --j) {
       if (reference_points_[j].valid()) {
         target_x = reference_points_[j].x();
@@ -194,41 +214,57 @@ proto::PlanCommand ReferenceTrajectoryPlanner::PlanStep(
       target_y = reference_points_[ref_idx].y();
     }
   }
+
   target_speed = ComputeLeaderLimitedSpeed(ego, npcs, target_speed);
-  cmd.set_desired_speed_mps(target_speed);
 
   const double dx = target_x - ego.x();
   const double dy = target_y - ego.y();
   const double dist = std::hypot(dx, dy);
-  const double desired_heading = std::atan2(dy, dx);
-  const double heading_error =
-      std::atan2(std::sin(desired_heading - ego.heading()),
-                 std::cos(desired_heading - ego.heading()));
+
+  // 【改进2：平顺刹车逻辑】而不是一刀切设为 0
+  double near_goal_speed = target_speed;
+  if (dist < kStopDistance) {
+    near_goal_speed =
+        std::min(target_speed, std::max(0.0, (dist - kGoalDeadzone) * 0.5));
+  }
+
+  cmd.set_desired_speed_mps(near_goal_speed);
 
   const double k_speed = 1.1;
-  const double near_goal_speed = (dist < 3.0) ? 0.0 : target_speed;
   cmd.set_target_acceleration(k_speed * (near_goal_speed - ego.speed()));
 
-  const double k_steer = 0.75;
-  cmd.set_steering_angle(k_steer * heading_error);
+  // 【改进1：修复死亡掉头】如果距离过近，停止更新转向角，直接锁定方向盘
+  if (dist < kGoalDeadzone) {
+    cmd.set_steering_angle(0.0);
+  } else {
+    const double desired_heading = std::atan2(dy, dx);
+    const double heading_error =
+        std::atan2(std::sin(desired_heading - ego.heading()),
+                   std::cos(desired_heading - ego.heading()));
+    const double k_steer = 0.75;
+    cmd.set_steering_angle(k_steer * heading_error);
+  }
+
   return cmd;
 }
 
 double ReferenceTrajectoryPlanner::ComputeLeaderLimitedSpeed(
-    const proto::VehicleState& ego, const std::vector<proto::NpcSnapshot>& npcs,
+    const proto::VehicleState &ego, const std::vector<proto::NpcSnapshot> &npcs,
     double desired_speed_mps) const {
   double safe_speed = desired_speed_mps;
   constexpr double kTimeHeadway = 1.2;
   constexpr double kMinGap = 2.5;
-  for (const auto& n : npcs) {
+  for (const auto &n : npcs) {
     const double dx = n.x() - ego.x();
     const double dy = n.y() - ego.y();
     const double c = std::cos(-ego.heading());
     const double s = std::sin(-ego.heading());
     const double fx = c * dx - s * dy;
     const double fy = s * dx + c * dy;
-    if (fx < 0.0 || fx > 60.0) continue;
-    if (std::fabs(fy) > (1.8 + 0.5 * n.width())) continue;
+    if (fx < 0.0 || fx > 60.0)
+      continue;
+    if (std::fabs(fy) > (1.8 + 0.5 * n.width()))
+      continue;
     const double gap = std::max(0.1, fx - 0.5 * n.length() - 2.25);
     const double npc_speed = std::hypot(n.vx(), n.vy());
     if (gap < 6.0) {
@@ -242,32 +278,46 @@ double ReferenceTrajectoryPlanner::ComputeLeaderLimitedSpeed(
 }
 
 class GoalSeekPlanner final : public Planner {
- public:
-  explicit GoalSeekPlanner(const proto::PlannerInputs& inputs)
-      : goal_(inputs.goal()),
-        desired_speed_mps_(inputs.desired_speed_mps()),
-        p_(inputs.ego_vehicle()),
-        traj_cfg_(DefaultTrajectoryConfig(inputs)) {}
+public:
+  explicit GoalSeekPlanner(const proto::PlannerInputs &inputs)
+      : goal_(inputs.goal()), desired_speed_mps_(inputs.desired_speed_mps()),
+        p_(inputs.ego_vehicle()), traj_cfg_(DefaultTrajectoryConfig(inputs)) {}
 
   std::string Name() const override { return "goal_seek"; }
 
-  proto::PlannerTrajectory Plan(const proto::PlannerObservation& obs) const override {
+  proto::PlannerTrajectory
+  Plan(const proto::PlannerObservation &obs) const override {
     proto::PlanCommand cmd;
     cmd.set_desired_speed_mps(desired_speed_mps_);
     const double dx = goal_.x() - obs.ego().x();
     const double dy = goal_.y() - obs.ego().y();
     const double dist = std::hypot(dx, dy);
-    const double desired_heading = std::atan2(dy, dx);
-    const double heading_error =
-        std::atan2(std::sin(desired_heading - obs.ego().heading()),
-                   std::cos(desired_heading - obs.ego().heading()));
-    cmd.set_target_acceleration(
-        0.8 * (((dist < 3.0) ? 0.0 : desired_speed_mps_) - obs.ego().speed()));
-    cmd.set_steering_angle(0.9 * heading_error);
+
+    constexpr double kGoalDeadzone = 1.0;
+
+    // 【改进2】平顺刹车
+    double v_tgt = desired_speed_mps_;
+    if (dist < 3.0) {
+      v_tgt = std::min(desired_speed_mps_,
+                       std::max(0.0, (dist - kGoalDeadzone) * 0.5));
+    }
+    cmd.set_target_acceleration(0.8 * (v_tgt - obs.ego().speed()));
+
+    // 【改进1】修复死亡掉头
+    if (dist < kGoalDeadzone) {
+      cmd.set_steering_angle(0.0);
+    } else {
+      const double desired_heading = std::atan2(dy, dx);
+      const double heading_error =
+          std::atan2(std::sin(desired_heading - obs.ego().heading()),
+                     std::cos(desired_heading - obs.ego().heading()));
+      cmd.set_steering_angle(0.9 * heading_error);
+    }
+
     return BuildTrajectoryFromCommand(cmd, obs.ego(), p_, traj_cfg_);
   }
 
- private:
+private:
   proto::Pose2D goal_;
   double desired_speed_mps_ = 13.9;
   proto::VehicleParams p_;
@@ -275,32 +325,33 @@ class GoalSeekPlanner final : public Planner {
 };
 
 class LocalDwaPlanner final : public Planner {
- public:
-  explicit LocalDwaPlanner(const proto::PlannerInputs& inputs)
-      : goal_(inputs.goal()),
-        desired_speed_mps_(inputs.desired_speed_mps()),
-        reference_points_(inputs.reference_points().begin(), inputs.reference_points().end()),
-        p_(inputs.ego_vehicle()),
-        traj_cfg_(DefaultTrajectoryConfig(inputs)) {}
+public:
+  explicit LocalDwaPlanner(const proto::PlannerInputs &inputs)
+      : goal_(inputs.goal()), desired_speed_mps_(inputs.desired_speed_mps()),
+        reference_points_(inputs.reference_points().begin(),
+                          inputs.reference_points().end()),
+        p_(inputs.ego_vehicle()), traj_cfg_(DefaultTrajectoryConfig(inputs)) {}
 
   std::string Name() const override { return "local_dwa"; }
 
-  proto::PlannerTrajectory Plan(const proto::PlannerObservation& obs) const override {
+  proto::PlannerTrajectory
+  Plan(const proto::PlannerObservation &obs) const override {
     const auto cmd = PlanStep(obs.ego(), {obs.npcs().begin(), obs.npcs().end()},
                               obs.frame_id());
     return BuildTrajectoryFromCommand(cmd, obs.ego(), p_, traj_cfg_);
   }
 
- private:
+private:
   static constexpr double kRollDt = 0.05;
   static constexpr int kHorizonSteps = 12;
   static constexpr double kNpcInflate = 0.35;
 
-  proto::PlanCommand PlanStep(const proto::VehicleState& ego,
-                              const std::vector<proto::NpcSnapshot>& npcs,
+  proto::PlanCommand PlanStep(const proto::VehicleState &ego,
+                              const std::vector<proto::NpcSnapshot> &npcs,
                               int frame_id) const;
-  proto::PlanCommand FallbackPurePursuit(const proto::VehicleState& ego, double target_x,
-                                         double target_y, double target_speed) const;
+  proto::PlanCommand FallbackPurePursuit(const proto::VehicleState &ego,
+                                         double target_x, double target_y,
+                                         double target_speed) const;
 
   proto::Pose2D goal_;
   double desired_speed_mps_ = 13.9;
@@ -309,29 +360,43 @@ class LocalDwaPlanner final : public Planner {
   proto::PlannerConfig traj_cfg_;
 };
 
-proto::PlanCommand LocalDwaPlanner::FallbackPurePursuit(const proto::VehicleState& ego,
-                                                         double target_x, double target_y,
-                                                         double target_speed) const {
+proto::PlanCommand
+LocalDwaPlanner::FallbackPurePursuit(const proto::VehicleState &ego,
+                                     double target_x, double target_y,
+                                     double target_speed) const {
   proto::PlanCommand cmd;
-  cmd.set_desired_speed_mps(target_speed);
   const double dx = target_x - ego.x();
   const double dy = target_y - ego.y();
   const double dist = std::hypot(dx, dy);
-  const double desired_heading = std::atan2(dy, dx);
-  const double heading_error =
-      std::atan2(std::sin(desired_heading - ego.heading()),
-                 std::cos(desired_heading - ego.heading()));
-  const double k_speed = 1.1;
-  const double near_goal_speed = (dist < 3.0) ? 0.0 : target_speed;
-  cmd.set_target_acceleration(k_speed * (near_goal_speed - ego.speed()));
-  const double k_steer = 0.85;
-  cmd.set_steering_angle(k_steer * heading_error);
+
+  constexpr double kGoalDeadzone = 1.0;
+
+  double near_goal_speed = target_speed;
+  if (dist < 3.0) {
+    near_goal_speed =
+        std::min(target_speed, std::max(0.0, (dist - kGoalDeadzone) * 0.5));
+  }
+
+  cmd.set_desired_speed_mps(near_goal_speed);
+  cmd.set_target_acceleration(1.1 * (near_goal_speed - ego.speed()));
+
+  // 【改进1】修复纯跟踪降级时的掉头 Bug
+  if (dist < kGoalDeadzone) {
+    cmd.set_steering_angle(0.0);
+  } else {
+    const double desired_heading = std::atan2(dy, dx);
+    const double heading_error =
+        std::atan2(std::sin(desired_heading - ego.heading()),
+                   std::cos(desired_heading - ego.heading()));
+    cmd.set_steering_angle(0.85 * heading_error);
+  }
   return cmd;
 }
 
-proto::PlanCommand LocalDwaPlanner::PlanStep(const proto::VehicleState& ego,
-                                             const std::vector<proto::NpcSnapshot>& npcs,
-                                             int frame_id) const {
+proto::PlanCommand
+LocalDwaPlanner::PlanStep(const proto::VehicleState &ego,
+                          const std::vector<proto::NpcSnapshot> &npcs,
+                          int frame_id) const {
   constexpr int kSteerSamples = 13;
   constexpr int kAccelSamples = 7;
 
@@ -343,7 +408,8 @@ proto::PlanCommand LocalDwaPlanner::PlanStep(const proto::VehicleState& ego,
   if (ref_idx < 0 && !reference_points_.empty()) {
     const int idx = std::max(
         0, std::min(frame_id, static_cast<int>(reference_points_.size() - 1)));
-    if (reference_points_[idx].valid()) ref_idx = idx;
+    if (reference_points_[idx].valid())
+      ref_idx = idx;
   }
 
   double target_speed = desired_speed_mps_;
@@ -358,7 +424,9 @@ proto::PlanCommand LocalDwaPlanner::PlanStep(const proto::VehicleState& ego,
 
   double tx = std::cos(ego.heading());
   double ty = std::sin(ego.heading());
-  if (ref_idx >= 0 && RefTangent(reference_points_, ref_idx, &tx, &ty)) {
+
+  // 【改进3】这里调用 RefTangent 时，直接传入引用即可，无需取地址符 &
+  if (ref_idx >= 0 && RefTangent(reference_points_, ref_idx, tx, ty)) {
   } else if (dist_goal > 1e-3) {
     tx = dx_goal / dist_goal;
     ty = dy_goal / dist_goal;
@@ -367,8 +435,8 @@ proto::PlanCommand LocalDwaPlanner::PlanStep(const proto::VehicleState& ego,
   double target_x = ego.x() + tx * 12.0;
   double target_y = ego.y() + ty * 12.0;
   if (ref_idx >= 0) {
-    const int look = std::min(
-        ref_idx + 15, static_cast<int>(reference_points_.size() - 1));
+    const int look =
+        std::min(ref_idx + 15, static_cast<int>(reference_points_.size() - 1));
     for (int j = look; j > ref_idx; --j) {
       if (reference_points_[j].valid()) {
         target_x = reference_points_[j].x();
@@ -388,24 +456,25 @@ proto::PlanCommand LocalDwaPlanner::PlanStep(const proto::VehicleState& ego,
   bool found_free = false;
 
   for (int ai = 0; ai < kAccelSamples; ++ai) {
-    const double t_a = static_cast<double>(ai) / static_cast<double>(kAccelSamples - 1);
+    const double t_a =
+        static_cast<double>(ai) / static_cast<double>(kAccelSamples - 1);
     const double accel =
         -p_.max_decel() + t_a * (p_.max_accel() + p_.max_decel());
 
     for (int si = 0; si < kSteerSamples; ++si) {
-      const double t_s = static_cast<double>(si) / static_cast<double>(kSteerSamples - 1);
-      const double steer_cmd =
-          -p_.max_steer() + t_s * (2.0 * p_.max_steer());
+      const double t_s =
+          static_cast<double>(si) / static_cast<double>(kSteerSamples - 1);
+      const double steer_cmd = -p_.max_steer() + t_s * (2.0 * p_.max_steer());
 
       proto::VehicleState roll;
       roll.CopyFrom(ego);
       int first_hit = kHorizonSteps + 1;
       bool hit = false;
       for (int h = 0; h < kHorizonSteps; ++h) {
-        SimulateOneStep(&roll, accel, steer_cmd, kRollDt, p_);
+        SimulateOneStep(roll, accel, steer_cmd, kRollDt, p_);
         const double t_npc = static_cast<double>(h + 1) * kRollDt;
         const OBB ego_b = MakeEgoObb(roll, p_, 0.08);
-        for (const auto& n : npcs) {
+        for (const auto &n : npcs) {
           const OBB nb = MakeNpcObbAt(n, t_npc, kNpcInflate);
           if (Overlap(ego_b, nb)) {
             first_hit = h;
@@ -413,14 +482,15 @@ proto::PlanCommand LocalDwaPlanner::PlanStep(const proto::VehicleState& ego,
             break;
           }
         }
-        if (hit) break;
+        if (hit)
+          break;
       }
 
-      const double prog =
-          (roll.x() - ego.x()) * tx + (roll.y() - ego.y()) * ty;
+      const double prog = (roll.x() - ego.x()) * tx + (roll.y() - ego.y()) * ty;
       const double lat_err =
           std::fabs(-ty * (roll.x() - ego.x()) + tx * (roll.y() - ego.y()));
-      const double cost_track = 0.12 * lat_err - 1.0 * prog + 0.35 * std::fabs(steer_cmd) +
+      const double cost_track = 0.12 * lat_err - 1.0 * prog +
+                                0.35 * std::fabs(steer_cmd) +
                                 0.04 * std::fabs(accel);
 
       if (!hit) {
@@ -449,8 +519,7 @@ proto::PlanCommand LocalDwaPlanner::PlanStep(const proto::VehicleState& ego,
     proto::PlanCommand fb =
         FallbackPurePursuit(ego, target_x, target_y, target_speed);
     if (ego.speed() < 1.0 && dist_goal > 3.0) {
-      fb.set_target_acceleration(
-          std::max(fb.target_acceleration(), 0.8));
+      fb.set_target_acceleration(std::max(fb.target_acceleration(), 0.8));
     } else {
       fb.set_target_acceleration(
           std::min(fb.target_acceleration(), -0.65 * p_.max_decel()));
@@ -470,29 +539,30 @@ proto::PlanCommand LocalDwaPlanner::PlanStep(const proto::VehicleState& ego,
   cmd.set_steering_angle(best_steer);
   cmd.set_desired_speed_mps(target_speed);
   if (dist_goal < 4.0) {
-    cmd.set_desired_speed_mps(std::min(cmd.desired_speed_mps(), std::max(0.0, dist_goal * 2.0)));
+    cmd.set_desired_speed_mps(
+        std::min(cmd.desired_speed_mps(), std::max(0.0, dist_goal * 2.0)));
   }
   return cmd;
 }
 
-const bool kRegisteredReferenceTracker = RegisterPlanner(
-    "reference_tracker", [](const proto::PlannerInputs& in) {
+const bool kRegisteredReferenceTracker =
+    RegisterPlanner("reference_tracker", [](const proto::PlannerInputs &in) {
       return std::make_unique<ReferenceTrajectoryPlanner>(in);
     });
-const bool kRegisteredGoalSeek = RegisterPlanner(
-    "goal_seek", [](const proto::PlannerInputs& in) {
+const bool kRegisteredGoalSeek =
+    RegisterPlanner("goal_seek", [](const proto::PlannerInputs &in) {
       return std::make_unique<GoalSeekPlanner>(in);
     });
-const bool kRegisteredLocalDwa = RegisterPlanner(
-    "local_dwa", [](const proto::PlannerInputs& in) {
+const bool kRegisteredLocalDwa =
+    RegisterPlanner("local_dwa", [](const proto::PlannerInputs &in) {
       return std::make_unique<LocalDwaPlanner>(in);
     });
 
-}  // namespace
+} // namespace
 
-std::unique_ptr<Planner> CreatePlanner(const std::string& planner_name,
-                                       const proto::PlannerInputs& inputs,
-                                       std::string* error) {
+std::unique_ptr<Planner> CreatePlanner(const std::string &planner_name,
+                                       const proto::PlannerInputs &inputs,
+                                       std::string *error) {
   (void)kRegisteredReferenceTracker;
   (void)kRegisteredGoalSeek;
   (void)kRegisteredLocalDwa;
@@ -509,11 +579,11 @@ std::unique_ptr<Planner> CreatePlanner(const std::string& planner_name,
 std::vector<std::string> AvailablePlannerNames() {
   std::vector<std::string> names;
   names.reserve(Registry().size());
-  for (const auto& kv : Registry()) {
+  for (const auto &kv : Registry()) {
     names.push_back(kv.first);
   }
   std::sort(names.begin(), names.end());
   return names;
 }
 
-}  // namespace hyw_sim
+} // namespace hyw_sim
