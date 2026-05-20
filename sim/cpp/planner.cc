@@ -53,7 +53,6 @@ int ClosestValidRefIndex(const std::vector<proto::ReferencePoint> &ref,
   return best;
 }
 
-// 【改进3：指针改引用】
 bool RefTangent(const std::vector<proto::ReferencePoint> &ref, int i,
                 double &tx, double &ty) {
   if (i < 0 || i >= static_cast<int>(ref.size()))
@@ -78,14 +77,12 @@ bool RefTangent(const std::vector<proto::ReferencePoint> &ref, int i,
   return true;
 }
 
-// 【改进3：指针改引用】
 void SimulateOneStep(proto::VehicleState &ego, double cmd_accel,
                      double cmd_steer, double step_dt,
                      const proto::VehicleParams &p) {
   proto::PlanCommand cmd;
   cmd.set_target_acceleration(cmd_accel);
   cmd.set_steering_angle(cmd_steer);
-  // 注意：假设外接的 StepVehicle API 必须接收指针，所以这里取地址
   StepVehicle(&ego, cmd, step_dt, p);
 }
 
@@ -145,7 +142,15 @@ double LeaderLimitedSpeedDwa(const proto::VehicleState &ego,
   }
   return safe_speed;
 }
-
+// 【终极修复 1】根据距离动态计算安全接近速度 (基于 v^2 = 2ad)
+double ComputeApproachSpeed(double dist, double deadzone) {
+  constexpr double kComfortableDecel = 1.5; // 期望的舒适减速度 1.5 m/s^2
+  // 如果进入死区，返回0；否则返回平滑递减的速度曲线
+  return std::sqrt(2.0 * kComfortableDecel * std::max(0.0, dist - deadzone));
+}
+// =====================================================================
+// ReferenceTrajectoryPlanner
+// =====================================================================
 class ReferenceTrajectoryPlanner final : public Planner {
 public:
   explicit ReferenceTrajectoryPlanner(const proto::PlannerInputs &inputs)
@@ -182,8 +187,7 @@ proto::PlanCommand ReferenceTrajectoryPlanner::PlanStep(
     const proto::VehicleState &ego, const std::vector<proto::NpcSnapshot> &npcs,
     int frame_id) const {
   proto::PlanCommand cmd;
-  constexpr double kStopDistance = 3.0;
-  constexpr double kGoalDeadzone = 1.0; // 【改进1】终点死区阈值
+  constexpr double kGoalDeadzone = 1.5;
 
   int ref_idx = ClosestValidRefIndex(reference_points_, ego.x(), ego.y());
   if (ref_idx < 0 && !reference_points_.empty()) {
@@ -219,31 +223,32 @@ proto::PlanCommand ReferenceTrajectoryPlanner::PlanStep(
 
   const double dx = target_x - ego.x();
   const double dy = target_y - ego.y();
-  const double dist = std::hypot(dx, dy);
+  const double dist = std::hypot(goal_.x() - ego.x(), goal_.y() - ego.y());
+  const double dot_goal = (goal_.x() - ego.x()) * std::cos(ego.heading()) +
+                          (goal_.y() - ego.y()) * std::sin(ego.heading());
 
-  // 【改进2：平顺刹车逻辑】而不是一刀切设为 0
-  double near_goal_speed = target_speed;
-  if (dist < kStopDistance) {
-    near_goal_speed =
-        std::min(target_speed, std::max(0.0, (dist - kGoalDeadzone) * 0.5));
+  if (dist < kGoalDeadzone || (dist < 10.0 && dot_goal < 0.0)) {
+    proto::PlanCommand stop_cmd;
+    stop_cmd.set_desired_speed_mps(0.0);
+    stop_cmd.set_target_acceleration(
+        std::max(-p_.max_decel(), 2.0 * (0.0 - ego.speed())));
+    stop_cmd.set_steering_angle(0.0);
+    return stop_cmd;
   }
+
+  // 【终极修复 3】同步运动学曲线
+  double safe_speed = ComputeApproachSpeed(dist, kGoalDeadzone);
+  double near_goal_speed = std::min(target_speed, safe_speed);
 
   cmd.set_desired_speed_mps(near_goal_speed);
+  cmd.set_target_acceleration(1.2 * (near_goal_speed - ego.speed()));
 
-  const double k_speed = 1.1;
-  cmd.set_target_acceleration(k_speed * (near_goal_speed - ego.speed()));
-
-  // 【改进1：修复死亡掉头】如果距离过近，停止更新转向角，直接锁定方向盘
-  if (dist < kGoalDeadzone) {
-    cmd.set_steering_angle(0.0);
-  } else {
-    const double desired_heading = std::atan2(dy, dx);
-    const double heading_error =
-        std::atan2(std::sin(desired_heading - ego.heading()),
-                   std::cos(desired_heading - ego.heading()));
-    const double k_steer = 0.75;
-    cmd.set_steering_angle(k_steer * heading_error);
-  }
+  const double desired_heading = std::atan2(dy, dx);
+  const double heading_error =
+      std::atan2(std::sin(desired_heading - ego.heading()),
+                 std::cos(desired_heading - ego.heading()));
+  const double k_steer = 0.75;
+  cmd.set_steering_angle(k_steer * heading_error);
 
   return cmd;
 }
@@ -251,6 +256,7 @@ proto::PlanCommand ReferenceTrajectoryPlanner::PlanStep(
 double ReferenceTrajectoryPlanner::ComputeLeaderLimitedSpeed(
     const proto::VehicleState &ego, const std::vector<proto::NpcSnapshot> &npcs,
     double desired_speed_mps) const {
+  // [代码与原版相同，略去修改]
   double safe_speed = desired_speed_mps;
   constexpr double kTimeHeadway = 1.2;
   constexpr double kMinGap = 2.5;
@@ -277,6 +283,9 @@ double ReferenceTrajectoryPlanner::ComputeLeaderLimitedSpeed(
   return safe_speed;
 }
 
+// =====================================================================
+// GoalSeekPlanner
+// =====================================================================
 class GoalSeekPlanner final : public Planner {
 public:
   explicit GoalSeekPlanner(const proto::PlannerInputs &inputs)
@@ -288,31 +297,35 @@ public:
   proto::PlannerTrajectory
   Plan(const proto::PlannerObservation &obs) const override {
     proto::PlanCommand cmd;
-    cmd.set_desired_speed_mps(desired_speed_mps_);
     const double dx = goal_.x() - obs.ego().x();
     const double dy = goal_.y() - obs.ego().y();
     const double dist = std::hypot(dx, dy);
+    const double dot_goal =
+        dx * std::cos(obs.ego().heading()) + dy * std::sin(obs.ego().heading());
 
-    constexpr double kGoalDeadzone = 1.0;
+    constexpr double kGoalDeadzone = 1.5;
 
-    // 【改进2】平顺刹车
-    double v_tgt = desired_speed_mps_;
-    if (dist < 3.0) {
-      v_tgt = std::min(desired_speed_mps_,
-                       std::max(0.0, (dist - kGoalDeadzone) * 0.5));
+    // 终点死区与过冲拦截
+    if (dist < kGoalDeadzone || (dist < 10.0 && dot_goal < 0.0)) {
+      proto::PlanCommand stop_cmd;
+      stop_cmd.set_desired_speed_mps(0.0);
+      stop_cmd.set_target_acceleration(
+          std::max(-p_.max_decel(), 2.0 * (0.0 - obs.ego().speed())));
+      stop_cmd.set_steering_angle(0.0);
+      return BuildTrajectoryFromCommand(stop_cmd, obs.ego(), p_, traj_cfg_);
     }
-    cmd.set_target_acceleration(0.8 * (v_tgt - obs.ego().speed()));
 
-    // 【改进1】修复死亡掉头
-    if (dist < kGoalDeadzone) {
-      cmd.set_steering_angle(0.0);
-    } else {
-      const double desired_heading = std::atan2(dy, dx);
-      const double heading_error =
-          std::atan2(std::sin(desired_heading - obs.ego().heading()),
-                     std::cos(desired_heading - obs.ego().heading()));
-      cmd.set_steering_angle(0.9 * heading_error);
-    }
+    // 【终极修复 2】利用运动学曲线限制目标速度，远距离就自然降速，杜绝冲线绕圈
+    double safe_speed = ComputeApproachSpeed(dist, kGoalDeadzone);
+    double v_tgt = std::min(desired_speed_mps_, safe_speed);
+    cmd.set_desired_speed_mps(v_tgt);
+    cmd.set_target_acceleration(1.2 * (v_tgt - obs.ego().speed()));
+
+    const double desired_heading = std::atan2(dy, dx);
+    const double heading_error =
+        std::atan2(std::sin(desired_heading - obs.ego().heading()),
+                   std::cos(desired_heading - obs.ego().heading()));
+    cmd.set_steering_angle(0.9 * heading_error);
 
     return BuildTrajectoryFromCommand(cmd, obs.ego(), p_, traj_cfg_);
   }
@@ -324,6 +337,9 @@ private:
   proto::PlannerConfig traj_cfg_;
 };
 
+// =====================================================================
+// LocalDwaPlanner
+// =====================================================================
 class LocalDwaPlanner final : public Planner {
 public:
   explicit LocalDwaPlanner(const proto::PlannerInputs &inputs)
@@ -365,31 +381,54 @@ LocalDwaPlanner::FallbackPurePursuit(const proto::VehicleState &ego,
                                      double target_x, double target_y,
                                      double target_speed) const {
   proto::PlanCommand cmd;
-  const double dx = target_x - ego.x();
-  const double dy = target_y - ego.y();
-  const double dist = std::hypot(dx, dy);
+  
+  // 1. 计算自车到【最终终点】(goal_) 的相对状态，用于判断是否该彻底停车
+  const double dx_goal = goal_.x() - ego.x();
+  const double dy_goal = goal_.y() - ego.y();
+  const double dist_goal = std::hypot(dx_goal, dy_goal);
+  
+  // 使用点积判断终点是在车头前方 (正数) 还是车尾后方 (负数)
+  const double dot_goal = dx_goal * std::cos(ego.heading()) + 
+                          dy_goal * std::sin(ego.heading());
 
-  constexpr double kGoalDeadzone = 1.0;
+  constexpr double kGoalDeadzone = 1.5;
 
-  double near_goal_speed = target_speed;
-  if (dist < 3.0) {
-    near_goal_speed =
-        std::min(target_speed, std::max(0.0, (dist - kGoalDeadzone) * 0.5));
+  // 2. 【终点拦截状态机】防止过冲、防止原地打转和倒车
+  // 条件：进入 1.5m 死区，或者（距离 10m 以内且终点已经跑到了车后方）
+  if (dist_goal < kGoalDeadzone || (dist_goal < 10.0 && dot_goal < 0.0)) {
+    proto::PlanCommand stop_cmd;
+    stop_cmd.set_desired_speed_mps(0.0);
+    // 阻尼式平稳刹车：加速度与当前车速成反比，车速归零时加速度也归零，绝不倒车
+    stop_cmd.set_target_acceleration(std::max(-p_.max_decel(), 2.0 * (0.0 - ego.speed())));
+    stop_cmd.set_steering_angle(0.0); // 停车时方向盘回正
+    return stop_cmd;
   }
 
-  cmd.set_desired_speed_mps(near_goal_speed);
-  cmd.set_target_acceleration(1.1 * (near_goal_speed - ego.speed()));
+  // 3. 【纵向控制】结合运动学曲线进行平滑降速
+  // 调用定义在文件顶部的 ComputeApproachSpeed 函数，获取当前距离下的物理安全速度上限
+  double safe_speed = ComputeApproachSpeed(dist_goal, kGoalDeadzone);
+  
+  // 实际的目标速度，不能超过安全曲线，也不能超过传入的 target_speed (参考线限速)
+  double v_tgt = std::min(target_speed, safe_speed);
 
-  // 【改进1】修复纯跟踪降级时的掉头 Bug
-  if (dist < kGoalDeadzone) {
-    cmd.set_steering_angle(0.0);
-  } else {
-    const double desired_heading = std::atan2(dy, dx);
-    const double heading_error =
-        std::atan2(std::sin(desired_heading - ego.heading()),
-                   std::cos(desired_heading - ego.heading()));
-    cmd.set_steering_angle(0.85 * heading_error);
-  }
+  cmd.set_desired_speed_mps(v_tgt);
+  // P 控制器输出加速度
+  cmd.set_target_acceleration(1.2 * (v_tgt - ego.speed()));
+
+  // 4. 【横向控制】纯跟踪 (Pure Pursuit) 转向逻辑
+  // 注意：转向追踪的是传入的预瞄点 (target_x, target_y)，而不是最终的 goal_
+  const double dx_target = target_x - ego.x();
+  const double dy_target = target_y - ego.y();
+  const double desired_heading = std::atan2(dy_target, dx_target);
+  
+  // 将角度误差限制在 [-pi, pi] 之间
+  const double heading_error =
+      std::atan2(std::sin(desired_heading - ego.heading()),
+                 std::cos(desired_heading - ego.heading()));
+                 
+  // P 控制器输出方向盘转角
+  cmd.set_steering_angle(0.85 * heading_error);
+  
   return cmd;
 }
 
@@ -399,10 +438,23 @@ LocalDwaPlanner::PlanStep(const proto::VehicleState &ego,
                           int frame_id) const {
   constexpr int kSteerSamples = 13;
   constexpr int kAccelSamples = 7;
+  constexpr double kGoalDeadzone = 1.5;
 
   const double dx_goal = goal_.x() - ego.x();
   const double dy_goal = goal_.y() - ego.y();
   const double dist_goal = std::hypot(dx_goal, dy_goal);
+  const double dot_goal =
+      dx_goal * std::cos(ego.heading()) + dy_goal * std::sin(ego.heading());
+
+  // 【终极修复】阻尼式彻底停车，且扩大捕捉圈到 10m 防过冲
+  if (dist_goal < kGoalDeadzone || (dist_goal < 10.0 && dot_goal < 0.0)) {
+    proto::PlanCommand stop_cmd;
+    stop_cmd.set_desired_speed_mps(0.0);
+    stop_cmd.set_target_acceleration(
+        std::max(-p_.max_decel(), 2.0 * (0.0 - ego.speed())));
+    stop_cmd.set_steering_angle(0.0);
+    return stop_cmd;
+  }
 
   int ref_idx = ClosestValidRefIndex(reference_points_, ego.x(), ego.y());
   if (ref_idx < 0 && !reference_points_.empty()) {
@@ -425,7 +477,6 @@ LocalDwaPlanner::PlanStep(const proto::VehicleState &ego,
   double tx = std::cos(ego.heading());
   double ty = std::sin(ego.heading());
 
-  // 【改进3】这里调用 RefTangent 时，直接传入引用即可，无需取地址符 &
   if (ref_idx >= 0 && RefTangent(reference_points_, ref_idx, tx, ty)) {
   } else if (dist_goal > 1e-3) {
     tx = dx_goal / dist_goal;
@@ -515,33 +566,35 @@ LocalDwaPlanner::PlanStep(const proto::VehicleState &ego,
     }
   }
 
+  // ... (保留 DWA 采样循环逻辑) ...
+
   if (!found_free) {
-    proto::PlanCommand fb =
-        FallbackPurePursuit(ego, target_x, target_y, target_speed);
-    if (ego.speed() < 1.0 && dist_goal > 3.0) {
-      fb.set_target_acceleration(std::max(fb.target_acceleration(), 0.8));
-    } else {
-      fb.set_target_acceleration(
-          std::min(fb.target_acceleration(), -0.65 * p_.max_decel()));
-    }
-    if (dist_goal < 4.0) {
-      fb.set_desired_speed_mps(
-          std::min(fb.desired_speed_mps(), std::max(0.0, dist_goal * 2.0)));
-    }
-    return fb;
+    return FallbackPurePursuit(ego, target_x, target_y, target_speed);
   }
 
   proto::PlanCommand cmd;
-  cmd.set_target_acceleration(best_a);
-  if (ego.speed() < 0.5 && dist_goal > 5.0 && cmd.target_acceleration() < 0.3) {
-    cmd.set_target_acceleration(0.5);
+
+  // 【终极修复 4】强制钳制 DWA 的纵向输出
+  // DWA 的代价函数是不考虑终点减速的，我们必须用运动学曲线强行接管
+  double safe_speed = ComputeApproachSpeed(dist_goal, kGoalDeadzone);
+
+  // 如果车速过快，或者进入了 10 米准备停车区，强行切断 DWA 油门，转为 P
+  // 控制器刹车
+  if (ego.speed() > safe_speed || dist_goal < 10.0) {
+    double v_tgt = std::min(target_speed, safe_speed);
+    cmd.set_target_acceleration(1.5 * (v_tgt - ego.speed()));
+    cmd.set_desired_speed_mps(v_tgt);
+  } else {
+    // 正常巡航听从 DWA
+    cmd.set_target_acceleration(best_a);
+    if (ego.speed() < 0.5 && dist_goal > 5.0 &&
+        cmd.target_acceleration() < 0.3) {
+      cmd.set_target_acceleration(0.5);
+    }
+    cmd.set_desired_speed_mps(target_speed);
   }
+
   cmd.set_steering_angle(best_steer);
-  cmd.set_desired_speed_mps(target_speed);
-  if (dist_goal < 4.0) {
-    cmd.set_desired_speed_mps(
-        std::min(cmd.desired_speed_mps(), std::max(0.0, dist_goal * 2.0)));
-  }
   return cmd;
 }
 

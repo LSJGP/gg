@@ -1,4 +1,6 @@
 build --enable_bzlmod=false
 build --cxxopt=-std=c++17
-build --spawn_strategy=local
+# 不要用 spawn_strategy=local：在 macOS 上会触发 protobuf
+# _virtual_includes 的 undeclared inclusion 误报（differencer 等目标）。
+# 默认 darwin-sandbox 即可。
 build --macos_minimum_os=10.15
