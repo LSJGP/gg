@@ -131,6 +131,7 @@ cc_library(
     deps = [
         "//proto/sim:runtime_cc_proto",
         "@com_github_gabime_spdlog//:spdlog",
+        "@com_google_protobuf//:protobuf",
     ],
 )
 

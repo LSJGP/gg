@@ -6,6 +6,7 @@
 #include <iomanip>
 #include <sstream>
 
+#include "google/protobuf/util/json_util.h"
 #include "spdlog/sinks/basic_file_sink.h"
 #include "spdlog/spdlog.h"
 
@@ -173,14 +174,17 @@ void SimFileLogger::Log(SimLogLevel level, std::string_view message,
   }
 }
 
-void SimFileLogger::LogFrame(SimLogLevel level, const proto::FrameRecord& f) {
+void SimFileLogger::LogProto(SimLogLevel level, std::string_view tag,
+                             const google::protobuf::Message& msg) {
   if (!ShouldEmit(level)) return;
-  std::ostringstream data;
-  data << "{\"frame_id\":" << f.frame_id() << ",\"timestamp_us\":" << f.timestamp_us()
-       << ",\"ego\":{\"x\":" << f.ego().x() << ",\"y\":" << f.ego().y()
-       << ",\"heading\":" << f.ego().heading() << ",\"speed\":" << f.ego().speed()
-       << "},\"npcs\":" << f.num_npcs() << "}";
-  Log(level, "frame", data.str());
+  std::string json;
+  google::protobuf::util::JsonPrintOptions opts;
+  opts.preserve_proto_field_names = true;
+  const auto st = google::protobuf::util::MessageToJsonString(msg, &json, opts);
+  if (!st.ok()) {
+    json = "{}";
+  }
+  Log(level, tag, json);
 }
 
 SimFileLogger::~SimFileLogger() {

@@ -13,6 +13,10 @@
 
 namespace hyw_sim {
 
+std::string FrameToGradingJsonLine(const proto::FrameRecord& frame,
+                                   const proto::StaticMap* scene_map,
+                                   const proto::VehicleParams& ego_params);
+
 class StreamPipeWriter {
  public:
   StreamPipeWriter() = default;
