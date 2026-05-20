@@ -4,6 +4,9 @@
 挑场景用：travel_m 太小（比如 < 5 米）的 scenario 做闭环没什么意义，会一开始
 就算"到目标点"。
 """
+# pyright: reportMissingImports=false
+# tensorflow / waymo-open-dataset 仅在 conda 环境安装。
+
 from __future__ import annotations
 
 import argparse

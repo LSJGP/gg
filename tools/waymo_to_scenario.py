@@ -561,6 +561,7 @@ def main() -> int:
     print(f"[converter] wrote {meta_path}")
     print(f"[converter] wrote {objs_path}")
     print(f"[converter] wrote {graph_path}")
+    return 0
 
 
 if __name__ == "__main__":
