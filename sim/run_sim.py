@@ -33,6 +33,12 @@ def _parse_args(argv) -> argparse.Namespace:
         help="bulk: read dynamic_objects.json once; stream: per-frame files under dynamic_objects/",
     )
     p.add_argument(
+        "--input-format",
+        choices=("auto", "json", "proto"),
+        default="auto",
+        help="Scenario file format: auto prefers .pb when present",
+    )
+    p.add_argument(
         "--benchmark",
         action="store_true",
         help="Benchmark mode: --cpp-mode off, skip sim_log, print timing JSON",
@@ -133,6 +139,8 @@ def main(argv=None) -> int:
         str(args.reference_step),
         "--scenario-load",
         args.scenario_load,
+        "--input-format",
+        args.input_format,
     ]
     if args.benchmark:
         cmd.append("--benchmark")

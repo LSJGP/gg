@@ -15,10 +15,17 @@ cc_library(
 )
 
 cc_library(
+    name = "input_format",
+    srcs = ["input_format.cc"],
+    hdrs = ["input_format.h"],
+)
+
+cc_library(
     name = "proto_io",
     srcs = ["proto_io.cc"],
     hdrs = ["proto_io.h"],
     deps = [
+        ":input_format",
         ":json_utils",
         "//proto/sim:map_cc_proto",
         "//proto/sim:scenario_cc_proto",
@@ -31,6 +38,7 @@ cc_library(
     srcs = ["dynamic_source.cc"],
     hdrs = ["dynamic_source.h"],
     deps = [
+        ":input_format",
         ":json_utils",
         ":proto_io",
         "//proto/sim:runtime_cc_proto",
@@ -44,6 +52,7 @@ cc_library(
     hdrs = ["scenario_loader.h"],
     deps = [
         ":dynamic_source",
+        ":input_format",
         ":proto_io",
         "//proto/sim:map_cc_proto",
         "//proto/sim:scenario_cc_proto",

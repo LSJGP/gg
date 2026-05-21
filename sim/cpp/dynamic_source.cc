@@ -7,6 +7,7 @@
 #include <sstream>
 #include <unordered_map>
 
+#include "cpp/input_format.h"
 #include "cpp/json_utils.h"
 #include "cpp/proto_io.h"
 
@@ -22,6 +23,26 @@ proto::NpcSnapshot ToSnapshot(const proto::Track& tr, const proto::TrackState& s
   proto::NpcSnapshot out;
   out.set_id(tr.id());
   out.set_object_type(tr.object_type());
+  out.set_x(st.x());
+  out.set_y(st.y());
+  out.set_z(st.z());
+  out.set_heading(st.yaw());
+  out.set_vx(st.vx());
+  out.set_vy(st.vy());
+  out.set_length(st.length());
+  out.set_width(st.width());
+  out.set_height(st.height());
+  return out;
+}
+
+proto::NpcSnapshot SnapshotFromFrameNpcState(const proto::FrameNpcState& fn) {
+  proto::NpcSnapshot out;
+  out.set_id(fn.id());
+  out.set_object_type(fn.object_type());
+  if (!fn.state().valid()) {
+    return out;
+  }
+  const auto& st = fn.state();
   out.set_x(st.x());
   out.set_y(st.y());
   out.set_z(st.z());
@@ -123,10 +144,10 @@ class BulkDynamicSource : public DynamicNpcSource {
 
 class StreamDynamicSource : public DynamicNpcSource {
  public:
-  static bool Create(const std::string& scenario_dir,
+  static bool Create(const std::string& scenario_dir, ScenarioInputFormat input_format,
                      std::unique_ptr<StreamDynamicSource>* out, std::string* error) {
     const fs::path base = fs::path(scenario_dir) / "dynamic_objects";
-    const fs::path header_path = base / "header.json";
+    const fs::path header_path = ResolveStreamFile(base, "header", input_format);
     const fs::path frames_dir = base / "frames";
     if (!fs::is_regular_file(header_path) || !fs::is_directory(frames_dir)) {
       if (error) {
@@ -137,25 +158,47 @@ class StreamDynamicSource : public DynamicNpcSource {
       return false;
     }
 
-    auto src = std::unique_ptr<StreamDynamicSource>(new StreamDynamicSource(base));
-    google::protobuf::Struct header;
-    if (!ReadJsonFileToStruct(header_path.string(), &header, error)) {
-      return false;
+    const bool use_proto = UsesProtoInput(input_format) ||
+                           (input_format == ScenarioInputFormat::kAuto &&
+                            header_path.extension() == ".pb");
+    auto src = std::unique_ptr<StreamDynamicSource>(
+        new StreamDynamicSource(base, use_proto));
+
+    if (use_proto) {
+      proto::StreamDynamicHeader header;
+      if (!ReadStreamHeaderFromFile(header_path.string(), &header, error)) {
+        return false;
+      }
+      if (header.timestamps_seconds_size() == 0) {
+        if (error) *error = "header.pb missing timestamps_seconds";
+        return false;
+      }
+      src->timestamps_.reserve(static_cast<size_t>(header.timestamps_seconds_size()));
+      for (double t : header.timestamps_seconds()) {
+        src->timestamps_.push_back(t);
+      }
+    } else {
+      google::protobuf::Struct header;
+      if (!ReadJsonFileToStruct(header_path.string(), &header, error)) {
+        return false;
+      }
+      const auto* ts_list = GetFieldList(header, "timestamps_seconds");
+      if (!ts_list || ts_list->values_size() == 0) {
+        if (error) *error = "header.json missing timestamps_seconds";
+        return false;
+      }
+      src->timestamps_.reserve(static_cast<size_t>(ts_list->values_size()));
+      for (const auto& v : ts_list->values()) {
+        src->timestamps_.push_back(GetNumber(v, 0.0));
+      }
     }
 
-    const auto* ts_list = GetFieldList(header, "timestamps_seconds");
-    if (!ts_list || ts_list->values_size() == 0) {
-      if (error) *error = "header.json missing timestamps_seconds";
-      return false;
-    }
-    src->timestamps_.reserve(static_cast<size_t>(ts_list->values_size()));
-    for (const auto& v : ts_list->values()) {
-      src->timestamps_.push_back(GetNumber(v, 0.0));
-    }
-
-    const fs::path sdc_path = base / "sdc_states.json";
+    const fs::path sdc_path = ResolveStreamFile(base, "sdc_states", input_format);
     if (fs::is_regular_file(sdc_path)) {
-      if (!ReadJsonFileToMessage(sdc_path.string(), &src->sdc_track_, error)) {
+      const bool sdc_ok =
+          use_proto ? ReadBinaryFileToMessage(sdc_path.string(), &src->sdc_track_, error)
+                    : ReadJsonFileToMessage(sdc_path.string(), &src->sdc_track_, error);
+      if (!sdc_ok) {
         return false;
       }
     }
@@ -219,7 +262,8 @@ class StreamDynamicSource : public DynamicNpcSource {
   }
 
  private:
-  explicit StreamDynamicSource(fs::path base) : base_dir_(std::move(base)) {}
+  StreamDynamicSource(fs::path base, bool use_proto)
+      : base_dir_(std::move(base)), use_proto_(use_proto) {}
 
   std::vector<proto::NpcSnapshot> LoadFrameCached(int idx) const {
     const auto it = frame_cache_.find(idx);
@@ -235,25 +279,38 @@ class StreamDynamicSource : public DynamicNpcSource {
   }
 
   std::vector<proto::NpcSnapshot> LoadFrame(int idx) const {
-    std::ostringstream path;
-    path << base_dir_.string() << "/frames/" << std::setw(5) << std::setfill('0') << idx
-         << ".json";
     const auto t0 = std::chrono::steady_clock::now();
-
-    google::protobuf::Struct doc;
-    std::string err;
     std::vector<proto::NpcSnapshot> out;
-    if (!ReadJsonFileToStruct(path.str(), &doc, &err)) {
-      return out;
-    }
+    std::string err;
 
-    const auto* states = GetFieldList(doc, "states");
-    if (states) {
-      for (const auto& sv : states->values()) {
-        if (sv.kind_case() != google::protobuf::Value::kStructValue) continue;
-        const auto& st = sv.struct_value();
-        if (!GetFieldBool(st, "valid", false)) continue;
-        out.push_back(SnapshotFromStateStruct(st));
+    if (use_proto_) {
+      std::ostringstream path;
+      path << base_dir_.string() << "/frames/" << std::setw(5) << std::setfill('0') << idx
+           << ".pb";
+      proto::DynamicFrame frame;
+      if (!ReadDynamicFrameFromFile(path.str(), &frame, &err)) {
+        return out;
+      }
+      for (const auto& fn : frame.states()) {
+        if (!fn.state().valid()) continue;
+        out.push_back(SnapshotFromFrameNpcState(fn));
+      }
+    } else {
+      std::ostringstream path;
+      path << base_dir_.string() << "/frames/" << std::setw(5) << std::setfill('0') << idx
+           << ".json";
+      google::protobuf::Struct doc;
+      if (!ReadJsonFileToStruct(path.str(), &doc, &err)) {
+        return out;
+      }
+      const auto* states = GetFieldList(doc, "states");
+      if (states) {
+        for (const auto& sv : states->values()) {
+          if (sv.kind_case() != google::protobuf::Value::kStructValue) continue;
+          const auto& st = sv.struct_value();
+          if (!GetFieldBool(st, "valid", false)) continue;
+          out.push_back(SnapshotFromStateStruct(st));
+        }
       }
     }
 
@@ -263,6 +320,7 @@ class StreamDynamicSource : public DynamicNpcSource {
   }
 
   fs::path base_dir_;
+  bool use_proto_ = false;
   std::vector<double> timestamps_;
   proto::Track sdc_track_;
 
@@ -278,9 +336,10 @@ std::unique_ptr<DynamicNpcSource> CreateBulkDynamicSource(
 }
 
 std::unique_ptr<DynamicNpcSource> CreateStreamDynamicSource(
-    const std::string& scenario_dir, std::string* error) {
+    const std::string& scenario_dir, ScenarioInputFormat input_format,
+    std::string* error) {
   std::unique_ptr<StreamDynamicSource> out;
-  if (!StreamDynamicSource::Create(scenario_dir, &out, error)) {
+  if (!StreamDynamicSource::Create(scenario_dir, input_format, &out, error)) {
     return nullptr;
   }
   return out;

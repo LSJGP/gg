@@ -1,0 +1,334 @@
+{
+  "source": "/home/gokousuika/hywgrading/data/training.tfrecord-00244-of-01000",
+  "scenario_id": "e05d9965c7f9202e",
+  "world_offset": {
+    "x": 820.8155311394208,
+    "y": 1886.9161414620962,
+    "z": -10.119196179703907
+  },
+  "timestamps_seconds": [
+    0.0,
+    0.09998,
+    0.20001,
+    0.30003,
+    0.40005,
+    0.50004,
+    0.60007,
+    0.70009,
+    0.80012,
+    0.9001,
+    1.00012,
+    1.1001,
+    1.20008,
+    1.30007,
+    1.40005,
+    1.50004,
+    1.60006,
+    1.70003,
+    1.80003,
+    1.90002,
+    2.0,
+    2.09998,
+    2.19996,
+    2.29994,
+    2.39992,
+    2.49991,
+    2.5999,
+    2.69985,
+    2.79986,
+    2.89985,
+    2.99987,
+    3.0999,
+    3.19992,
+    3.29994,
+    3.39992,
+    3.49993,
+    3.59996,
+    3.69995,
+    3.79997,
+    3.89999,
+    3.99997,
+    4.1,
+    4.19999,
+    4.29997,
+    4.39999,
+    4.49998,
+    4.6,
+    4.69999,
+    4.80001,
+    4.89999,
+    5.00001,
+    5.09999,
+    5.20002,
+    5.3,
+    5.39999,
+    5.50001,
+    5.59999,
+    5.69997,
+    5.79996,
+    5.89995,
+    5.99994,
+    6.09993,
+    6.19993,
+    6.29995,
+    6.39993,
+    6.49991,
+    6.59994,
+    6.69996,
+    6.79994,
+    6.89994,
+    6.99993,
+    7.09991,
+    7.1999,
+    7.29989,
+    7.39987,
+    7.49986,
+    7.59985,
+    7.69984,
+    7.79983,
+    7.89981,
+    7.9998,
+    8.09982,
+    8.19981,
+    8.29982,
+    8.39981,
+    8.49984,
+    8.59985,
+    8.69984,
+    8.79986,
+    8.89988,
+    8.99987
+  ],
+  "current_time_index": 10,
+  "sdc_track_index": 37,
+  "tracks": [
+    {
+      "track_index": 0,
+      "id": 1025,
+      "object_type": "VEHICLE",
+      "is_sdc": false
+    },
+    {
+      "track_index": 1,
+      "id": 1026,
+      "object_type": "VEHICLE",
+      "is_sdc": false
+    },
+    {
+      "track_index": 2,
+      "id": 1029,
+      "object_type": "VEHICLE",
+      "is_sdc": false
+    },
+    {
+      "track_index": 3,
+      "id": 1030,
+      "object_type": "VEHICLE",
+      "is_sdc": false
+    },
+    {
+      "track_index": 4,
+      "id": 1033,
+      "object_type": "VEHICLE",
+      "is_sdc": false
+    },
+    {
+      "track_index": 5,
+      "id": 1035,
+      "object_type": "VEHICLE",
+      "is_sdc": false
+    },
+    {
+      "track_index": 6,
+      "id": 1036,
+      "object_type": "VEHICLE",
+      "is_sdc": false
+    },
+    {
+      "track_index": 7,
+      "id": 1037,
+      "object_type": "VEHICLE",
+      "is_sdc": false
+    },
+    {
+      "track_index": 8,
+      "id": 1039,
+      "object_type": "VEHICLE",
+      "is_sdc": false
+    },
+    {
+      "track_index": 9,
+      "id": 1040,
+      "object_type": "VEHICLE",
+      "is_sdc": false
+    },
+    {
+      "track_index": 10,
+      "id": 1041,
+      "object_type": "VEHICLE",
+      "is_sdc": false
+    },
+    {
+      "track_index": 11,
+      "id": 1042,
+      "object_type": "VEHICLE",
+      "is_sdc": false
+    },
+    {
+      "track_index": 12,
+      "id": 1043,
+      "object_type": "VEHICLE",
+      "is_sdc": false
+    },
+    {
+      "track_index": 13,
+      "id": 1044,
+      "object_type": "VEHICLE",
+      "is_sdc": false
+    },
+    {
+      "track_index": 14,
+      "id": 1045,
+      "object_type": "VEHICLE",
+      "is_sdc": false
+    },
+    {
+      "track_index": 15,
+      "id": 1046,
+      "object_type": "VEHICLE",
+      "is_sdc": false
+    },
+    {
+      "track_index": 16,
+      "id": 1047,
+      "object_type": "VEHICLE",
+      "is_sdc": false
+    },
+    {
+      "track_index": 17,
+      "id": 1048,
+      "object_type": "VEHICLE",
+      "is_sdc": false
+    },
+    {
+      "track_index": 18,
+      "id": 1049,
+      "object_type": "VEHICLE",
+      "is_sdc": false
+    },
+    {
+      "track_index": 19,
+      "id": 1050,
+      "object_type": "VEHICLE",
+      "is_sdc": false
+    },
+    {
+      "track_index": 20,
+      "id": 1051,
+      "object_type": "VEHICLE",
+      "is_sdc": false
+    },
+    {
+      "track_index": 21,
+      "id": 1052,
+      "object_type": "VEHICLE",
+      "is_sdc": false
+    },
+    {
+      "track_index": 22,
+      "id": 1053,
+      "object_type": "VEHICLE",
+      "is_sdc": false
+    },
+    {
+      "track_index": 23,
+      "id": 1054,
+      "object_type": "VEHICLE",
+      "is_sdc": false
+    },
+    {
+      "track_index": 24,
+      "id": 1055,
+      "object_type": "VEHICLE",
+      "is_sdc": false
+    },
+    {
+      "track_index": 25,
+      "id": 1056,
+      "object_type": "VEHICLE",
+      "is_sdc": false
+    },
+    {
+      "track_index": 26,
+      "id": 1057,
+      "object_type": "VEHICLE",
+      "is_sdc": false
+    },
+    {
+      "track_index": 27,
+      "id": 1058,
+      "object_type": "VEHICLE",
+      "is_sdc": false
+    },
+    {
+      "track_index": 28,
+      "id": 1534,
+      "object_type": "PEDESTRIAN",
+      "is_sdc": false
+    },
+    {
+      "track_index": 29,
+      "id": 1537,
+      "object_type": "PEDESTRIAN",
+      "is_sdc": false
+    },
+    {
+      "track_index": 30,
+      "id": 1538,
+      "object_type": "PEDESTRIAN",
+      "is_sdc": false
+    },
+    {
+      "track_index": 31,
+      "id": 1530,
+      "object_type": "PEDESTRIAN",
+      "is_sdc": false
+    },
+    {
+      "track_index": 32,
+      "id": 1531,
+      "object_type": "PEDESTRIAN",
+      "is_sdc": false
+    },
+    {
+      "track_index": 33,
+      "id": 1532,
+      "object_type": "PEDESTRIAN",
+      "is_sdc": false
+    },
+    {
+      "track_index": 34,
+      "id": 1021,
+      "object_type": "VEHICLE",
+      "is_sdc": false
+    },
+    {
+      "track_index": 35,
+      "id": 1022,
+      "object_type": "VEHICLE",
+      "is_sdc": false
+    },
+    {
+      "track_index": 36,
+      "id": 1023,
+      "object_type": "VEHICLE",
+      "is_sdc": false
+    },
+    {
+      "track_index": 37,
+      "id": 1546,
+      "object_type": "VEHICLE",
+      "is_sdc": true
+    }
+  ]
+}

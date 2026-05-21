@@ -5,6 +5,7 @@
 #include <string>
 #include <vector>
 
+#include "cpp/input_format.h"
 #include "proto/sim/runtime.pb.h"
 #include "proto/sim/scenario.pb.h"
 
@@ -31,6 +32,7 @@ std::unique_ptr<DynamicNpcSource> CreateBulkDynamicSource(
     proto::DynamicObjects dynamic);
 
 std::unique_ptr<DynamicNpcSource> CreateStreamDynamicSource(
-    const std::string& scenario_dir, std::string* error);
+    const std::string& scenario_dir, ScenarioInputFormat input_format,
+    std::string* error);
 
 }  // namespace hyw_sim

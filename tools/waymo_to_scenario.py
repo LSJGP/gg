@@ -25,6 +25,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
+_TOOLS = Path(__file__).resolve().parent
+if str(_TOOLS) not in sys.path:
+    sys.path.insert(0, str(_TOOLS))
+
 
 DEFAULT_SPEED_LIMIT_KMH = 50.0
 
@@ -441,6 +445,27 @@ def write_dynamic_objects(scene: ConvertedScene, path: Path, source: str) -> Non
         f.write("\n")
 
 
+def write_meta_pb(scene: ConvertedScene, path: Path, source: str, scenario_index: int) -> None:
+    from hyw_proto_convert import scene_to_scenario_meta, write_message_pb
+
+    meta = scene_to_scenario_meta(scene, source, scenario_index)
+    write_message_pb(meta, path)
+
+
+def write_dynamic_objects_pb(scene: ConvertedScene, path: Path, source: str) -> None:
+    from hyw_proto_convert import scene_to_dynamic_objects, write_message_pb
+
+    dyn = scene_to_dynamic_objects(scene, source)
+    write_message_pb(dyn, path)
+
+
+def write_lane_graph_pb(scene: ConvertedScene, path: Path, source: str) -> None:
+    from hyw_proto_convert import scene_to_static_map, write_message_pb
+
+    sm = scene_to_static_map(scene, source)
+    write_message_pb(sm, path)
+
+
 def write_lane_graph(scene: ConvertedScene, path: Path, source: str) -> None:
     doc = {
         "source": source,
@@ -492,6 +517,16 @@ def main() -> int:
         "--split-dynamic-frames",
         action="store_true",
         help="Also write dynamic_objects/header.json + frames/ for stream loading",
+    )
+    p.add_argument(
+        "--write-proto",
+        action="store_true",
+        help="Also write scenario_meta.pb, dynamic_objects.pb, lane_graph.pb",
+    )
+    p.add_argument(
+        "--proto-only",
+        action="store_true",
+        help="Write .pb only (skip JSON scenario files)",
     )
     args = p.parse_args()
 
@@ -545,9 +580,33 @@ def main() -> int:
     meta_path = out_dir / "scenario_meta.json"
     objs_path = out_dir / "dynamic_objects.json"
     graph_path = out_dir / "lane_graph.json"
+    meta_pb = out_dir / "scenario_meta.pb"
+    objs_pb = out_dir / "dynamic_objects.pb"
+    graph_pb = out_dir / "lane_graph.pb"
 
-    write_meta(scene, meta_path, source=str(tf_path), scenario_index=args.scenario_index)
-    write_dynamic_objects(scene, objs_path, source=str(tf_path))
+    write_json = not args.proto_only
+    write_pb = args.write_proto or args.proto_only
+
+    if write_pb:
+        try:
+            import hyw_proto_convert  # noqa: F401
+        except ImportError:
+            print(
+                "hyw_sim Python stubs missing. Run: bash tools/gen_sim_protos.sh",
+                file=sys.stderr,
+            )
+            return 2
+
+    if write_json:
+        write_meta(scene, meta_path, source=str(tf_path), scenario_index=args.scenario_index)
+        write_dynamic_objects(scene, objs_path, source=str(tf_path))
+        write_lane_graph(scene, graph_path, source=str(tf_path))
+
+    if write_pb:
+        write_meta_pb(scene, meta_pb, source=str(tf_path), scenario_index=args.scenario_index)
+        write_dynamic_objects_pb(scene, objs_pb, source=str(tf_path))
+        write_lane_graph_pb(scene, graph_pb, source=str(tf_path))
+
     if args.split_dynamic_frames:
         import importlib.util
 
@@ -556,8 +615,8 @@ def main() -> int:
         _mod = importlib.util.module_from_spec(_spec)
         assert _spec.loader is not None
         _spec.loader.exec_module(_mod)
-        _mod.split_dynamic_objects(out_dir)
-    write_lane_graph(scene, graph_path, source=str(tf_path))
+        split_fmt = "both" if write_json and write_pb else ("proto" if write_pb else "json")
+        _mod.split_dynamic_objects(out_dir, fmt=split_fmt)
 
     mc = scene.map_feature_counts
     print(
@@ -572,9 +631,14 @@ def main() -> int:
     print(f"[converter] lane_graph.json: lanes exported={len(scene.static_map.get('lanes', []))}")
     print(f"[converter] init_pose = {scene.init_pose}")
     print(f"[converter] goal_pose = {scene.goal_pose}")
-    print(f"[converter] wrote {meta_path}")
-    print(f"[converter] wrote {objs_path}")
-    print(f"[converter] wrote {graph_path}")
+    if write_json:
+        print(f"[converter] wrote {meta_path}")
+        print(f"[converter] wrote {objs_path}")
+        print(f"[converter] wrote {graph_path}")
+    if write_pb:
+        print(f"[converter] wrote {meta_pb}")
+        print(f"[converter] wrote {objs_pb}")
+        print(f"[converter] wrote {graph_pb}")
 
 
 if __name__ == "__main__":

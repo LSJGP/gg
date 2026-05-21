@@ -10,6 +10,7 @@
 #include <vector>
 
 #include "cpp/grading_bridge.h"
+#include "cpp/input_format.h"
 #include "cpp/lane_graph.h"
 #include "cpp/planner.h"
 #include "cpp/proto_io.h"
@@ -54,6 +55,7 @@ struct Args {
   std::string log_level = "info";
   std::string metrics_config;
   std::string scenario_load = "bulk";
+  std::string input_format = "auto";
   bool benchmark = false;
 };
 
@@ -61,6 +63,7 @@ void PrintUsage(const char* argv0) {
   std::cerr
       << "Usage: " << argv0 << " --scenario-dir <dir> [options]\n"
       << "  --scenario-load <bulk|stream>  (default: bulk)\n"
+      << "  --input-format <auto|json|proto>  (default: auto)\n"
       << "  --benchmark  (implies --cpp-mode off, skip sim_log write)\n"
       << "  --output <path>\n"
       << "  --dt <seconds>\n"
@@ -90,6 +93,8 @@ bool ParseArgs(int argc, char** argv, Args* args) {
       args->scenario_dir = next("--scenario-dir");
     } else if (k == "--scenario-load") {
       args->scenario_load = next("--scenario-load");
+    } else if (k == "--input-format") {
+      args->input_format = next("--input-format");
     } else if (k == "--benchmark") {
       args->benchmark = true;
     } else if (k == "--output") {
@@ -161,11 +166,13 @@ hyw_sim::proto::VehicleParams MakeVehicleParams(const Args& args) {
 }
 
 void PrintBenchmarkJson(const std::string& scenario_load,
+                        const std::string& input_format,
                         const std::string& scenario_dir, double load_meta_map_ms,
                         double load_dynamic_ms, double load_frames_ms,
                         double sim_loop_ms, double total_ms, size_t frames) {
   std::cout << std::fixed << std::setprecision(3);
   std::cout << "{\"scenario_load\":\"" << scenario_load << "\""
+            << ",\"input_format\":\"" << input_format << "\""
             << ",\"scenario_dir\":\"" << hyw_sim::SimFileLogger::EscapeJsonString(scenario_dir)
             << "\""
             << ",\"load_meta_map_ms\":" << load_meta_map_ms
@@ -198,8 +205,10 @@ int main(int argc, char** argv) {
   }
 
   hyw_sim::ScenarioLoadMode load_mode;
+  hyw_sim::ScenarioInputFormat input_format;
   try {
     load_mode = ParseLoadMode(args.scenario_load);
+    input_format = hyw_sim::ParseInputFormat(args.input_format);
   } catch (const std::exception& e) {
     std::cerr << "[sim_cpp] " << e.what() << "\n";
     return 1;
@@ -210,8 +219,8 @@ int main(int argc, char** argv) {
   std::string err;
 
   const auto meta_map_t0 = Clock::now();
-  if (!hyw_sim::LoadScenarioMetaAndMap(args.scenario_dir, &bundle.meta, &bundle.map,
-                                       &err)) {
+  if (!hyw_sim::LoadScenarioMetaAndMap(args.scenario_dir, input_format, &bundle.meta,
+                                       &bundle.map, &err)) {
     std::cerr << "[sim_cpp] failed loading scenario meta/map: " << err << "\n";
     return 2;
   }
@@ -220,20 +229,21 @@ int main(int argc, char** argv) {
 
   const auto dynamic_t0 = Clock::now();
   if (load_mode == hyw_sim::ScenarioLoadMode::kBulk) {
-    const fs::path objs_path = fs::path(args.scenario_dir) / "dynamic_objects.json";
+    const fs::path objs_path = hyw_sim::ResolveScenarioFile(
+        fs::path(args.scenario_dir), "dynamic_objects", input_format);
     if (!hyw_sim::ReadDynamicObjectsFromFile(objs_path.string(), &bundle.dynamic,
                                              &err)) {
       std::cerr << "[sim_cpp] failed loading dynamic_objects: " << err << "\n";
       return 2;
     }
     if (bundle.dynamic.timestamps_seconds_size() == 0) {
-      std::cerr << "[sim_cpp] dynamic_objects.json missing timestamps_seconds\n";
+      std::cerr << "[sim_cpp] dynamic_objects missing timestamps_seconds\n";
       return 2;
     }
     dynamic_source = hyw_sim::CreateBulkDynamicSource(std::move(bundle.dynamic));
   } else {
     dynamic_source =
-        hyw_sim::CreateStreamDynamicSource(args.scenario_dir, &err);
+        hyw_sim::CreateStreamDynamicSource(args.scenario_dir, input_format, &err);
     if (!dynamic_source) {
       std::cerr << "[sim_cpp] failed loading stream dynamic: " << err << "\n";
       return 2;
@@ -388,7 +398,8 @@ int main(int argc, char** argv) {
   const double total_ms = MsSince(total_t0, Clock::now());
 
   if (args.benchmark) {
-    PrintBenchmarkJson(args.scenario_load, args.scenario_dir, load_meta_map_ms,
+    PrintBenchmarkJson(args.scenario_load, args.input_format, args.scenario_dir,
+                       load_meta_map_ms,
                        load_dynamic_ms, load_frames_ms, sim_loop_ms, total_ms,
                        records.size());
     return 0;
@@ -410,9 +421,9 @@ int main(int argc, char** argv) {
   std::cout << "[sim_cpp] wrote " << args.output << " (" << records.size()
             << " frames)\n";
 
-  PrintBenchmarkJson(args.scenario_load, args.scenario_dir, load_meta_map_ms,
-                     load_dynamic_ms, load_frames_ms, sim_loop_ms, total_ms,
-                     records.size());
+  PrintBenchmarkJson(args.scenario_load, args.input_format, args.scenario_dir,
+                     load_meta_map_ms, load_dynamic_ms, load_frames_ms, sim_loop_ms,
+                     total_ms, records.size());
 
   if (!args.grading_bin.empty() &&
       (args.cpp_mode == "offline" || args.cpp_mode == "both")) {

@@ -3,11 +3,16 @@
 #include <fstream>
 #include <sstream>
 
+#include "cpp/input_format.h"
 #include "cpp/json_utils.h"
 #include "google/protobuf/util/json_util.h"
 
 namespace hyw_sim {
 namespace {
+
+bool PathIsProto(const std::string& path) {
+  return path.size() >= 3 && path.compare(path.size() - 3, 3, ".pb") == 0;
+}
 
 std::string ReadWholeFile(const std::string& path) {
   std::ifstream f(path, std::ios::binary);
@@ -227,21 +232,77 @@ bool ReadJsonFileToMessage(const std::string& path, google::protobuf::Message* o
   return ParseJsonToMessage(text, out, error);
 }
 
+bool ReadBinaryFileToMessage(const std::string& path, google::protobuf::Message* out,
+                             std::string* error) {
+  std::ifstream f(path, std::ios::binary);
+  if (!f.is_open()) {
+    if (error) *error = "cannot open file: " + path;
+    return false;
+  }
+  std::string bytes((std::istreambuf_iterator<char>(f)),
+                    std::istreambuf_iterator<char>());
+  if (bytes.empty()) {
+    if (error) *error = "file is empty: " + path;
+    return false;
+  }
+  if (!out->ParseFromString(bytes)) {
+    if (error) *error = "protobuf parse failed: " + path;
+    return false;
+  }
+  return true;
+}
+
+bool ReadMessageFromFile(const std::string& path, google::protobuf::Message* out,
+                         ScenarioInputFormat fmt, std::string* error) {
+  const bool as_proto =
+      (fmt == ScenarioInputFormat::kProto) ||
+      (fmt == ScenarioInputFormat::kAuto && PathIsProto(path));
+  if (as_proto) {
+    return ReadBinaryFileToMessage(path, out, error);
+  }
+  return ReadJsonFileToMessage(path, out, error);
+}
+
 bool ReadScenarioMetaFromFile(const std::string& path, proto::ScenarioMeta* out,
                               std::string* error) {
+  if (PathIsProto(path)) {
+    return ReadBinaryFileToMessage(path, out, error);
+  }
   return ReadJsonFileToMessage(path, out, error);
 }
 
 bool ReadDynamicObjectsFromFile(const std::string& path,
                                 proto::DynamicObjects* out, std::string* error) {
+  if (PathIsProto(path)) {
+    return ReadBinaryFileToMessage(path, out, error);
+  }
   return ReadJsonFileToMessage(path, out, error);
 }
 
 bool ReadStaticMapFromFile(const std::string& path, proto::StaticMap* out,
                            std::string* error) {
+  if (PathIsProto(path)) {
+    return ReadBinaryFileToMessage(path, out, error);
+  }
   google::protobuf::Struct doc;
   if (!ReadJsonFileToStruct(path, &doc, error)) return false;
   return StaticMapFromStruct(doc, out, error);
+}
+
+bool ReadStreamHeaderFromFile(const std::string& path,
+                              proto::StreamDynamicHeader* out, std::string* error) {
+  if (PathIsProto(path)) {
+    return ReadBinaryFileToMessage(path, out, error);
+  }
+  return ReadJsonFileToMessage(path, out, error);
+}
+
+bool ReadDynamicFrameFromFile(const std::string& path, proto::DynamicFrame* out,
+                              std::string* error) {
+  if (PathIsProto(path)) {
+    return ReadBinaryFileToMessage(path, out, error);
+  }
+  return ReadJsonFileToMessage(path, out, error);
 }
 
 }  // namespace hyw_sim

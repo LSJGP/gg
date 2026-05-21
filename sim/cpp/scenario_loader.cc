@@ -2,12 +2,14 @@
 
 #include <filesystem>
 
+#include "cpp/input_format.h"
 #include "cpp/proto_io.h"
 
 namespace hyw_sim {
 namespace fs = std::filesystem;
 
 bool LoadScenarioMetaAndMap(const std::string& scenario_dir,
+                            ScenarioInputFormat input_format,
                             proto::ScenarioMeta* meta, proto::StaticMap* map,
                             std::string* error) {
   if (!meta || !map) {
@@ -18,8 +20,9 @@ bool LoadScenarioMetaAndMap(const std::string& scenario_dir,
   map->Clear();
 
   const fs::path base = fs::path(scenario_dir);
-  const fs::path meta_path = base / "scenario_meta.json";
-  const fs::path graph_path = base / "lane_graph.json";
+  const fs::path meta_path =
+      ResolveScenarioFile(base, "scenario_meta", input_format);
+  const fs::path graph_path = ResolveScenarioFile(base, "lane_graph", input_format);
   if (!fs::is_regular_file(meta_path) || !fs::is_regular_file(graph_path)) {
     if (error) {
       *error = "missing required scenario files in: " + scenario_dir;
@@ -35,14 +38,14 @@ bool LoadScenarioMetaAndMap(const std::string& scenario_dir,
   }
 
   if (!meta->has_init_pose() || !meta->has_goal_pose()) {
-    if (error) *error = "scenario_meta.json missing init_pose or goal_pose";
+    if (error) *error = "scenario meta missing init_pose or goal_pose";
     return false;
   }
   return true;
 }
 
 bool LoadScenarioFromDir(const std::string& scenario_dir, ScenarioLoadMode mode,
-                         ScenarioBundle* bundle,
+                         ScenarioInputFormat input_format, ScenarioBundle* bundle,
                          std::unique_ptr<DynamicNpcSource>* dynamic_source,
                          std::string* error) {
   if (!bundle || !dynamic_source) {
@@ -54,28 +57,31 @@ bool LoadScenarioFromDir(const std::string& scenario_dir, ScenarioLoadMode mode,
   bundle->map.Clear();
   *dynamic_source = nullptr;
 
-  if (!LoadScenarioMetaAndMap(scenario_dir, &bundle->meta, &bundle->map, error)) {
+  if (!LoadScenarioMetaAndMap(scenario_dir, input_format, &bundle->meta, &bundle->map,
+                              error)) {
     return false;
   }
 
   if (mode == ScenarioLoadMode::kBulk) {
-    const fs::path objs_path = fs::path(scenario_dir) / "dynamic_objects.json";
+    const fs::path objs_path =
+        ResolveScenarioFile(fs::path(scenario_dir), "dynamic_objects", input_format);
     if (!fs::is_regular_file(objs_path)) {
-      if (error) *error = "missing dynamic_objects.json in: " + scenario_dir;
+      if (error) *error = "missing dynamic_objects file in: " + scenario_dir;
       return false;
     }
     if (!ReadDynamicObjectsFromFile(objs_path.string(), &bundle->dynamic, error)) {
       return false;
     }
     if (bundle->dynamic.timestamps_seconds_size() == 0) {
-      if (error) *error = "dynamic_objects.json missing timestamps_seconds";
+      if (error) *error = "dynamic_objects missing timestamps_seconds";
       return false;
     }
     *dynamic_source = CreateBulkDynamicSource(std::move(bundle->dynamic));
     return true;
   }
 
-  *dynamic_source = CreateStreamDynamicSource(scenario_dir, error);
+  *dynamic_source =
+      CreateStreamDynamicSource(scenario_dir, input_format, error);
   if (!*dynamic_source) {
     return false;
   }
