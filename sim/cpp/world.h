@@ -1,8 +1,10 @@
 #pragma once
 
 #include <functional>
+#include <memory>
 #include <vector>
 
+#include "cpp/dynamic_source.h"
 #include "cpp/lane_graph.h"
 #include "cpp/planner.h"
 #include "proto/sim/runtime.pb.h"
@@ -19,20 +21,22 @@ struct WorldStepHooks {
 
 class WorldSimulator {
  public:
-  WorldSimulator(const proto::ScenarioMeta& meta, const proto::DynamicObjects& dynamic,
+  WorldSimulator(const proto::ScenarioMeta& meta,
+                 std::unique_ptr<DynamicNpcSource> dynamic,
                  const LaneGraph& lane_graph, proto::VehicleParams params);
 
   std::vector<proto::FrameRecord> Run(const Planner& planner,
                                       const proto::WorldConfig& cfg,
                                       const WorldStepHooks* hooks = nullptr);
 
+  int64_t stream_io_us() const;
+
  private:
   std::vector<proto::NpcSnapshot> NPCsAtTime(double t) const;
   std::vector<proto::NpcSnapshot> NPCsAtIndex(int idx) const;
-  std::vector<proto::NpcSnapshot> InterpNPCs(int lo, int hi, double a) const;
 
   proto::ScenarioMeta meta_;
-  proto::DynamicObjects dynamic_;
+  std::unique_ptr<DynamicNpcSource> dynamic_;
   const LaneGraph& lane_graph_;
   proto::VehicleParams params_;
 };

@@ -1,8 +1,10 @@
 #include <algorithm>
+#include <chrono>
+#include <cmath>
 #include <filesystem>
 #include <functional>
+#include <iomanip>
 #include <iostream>
-#include <cmath>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -10,6 +12,7 @@
 #include "cpp/grading_bridge.h"
 #include "cpp/lane_graph.h"
 #include "cpp/planner.h"
+#include "cpp/proto_io.h"
 #include "cpp/scenario_loader.h"
 #include "cpp/sim_logger.h"
 #include "cpp/world.h"
@@ -18,15 +21,19 @@ namespace fs = std::filesystem;
 
 namespace {
 
-// Defaults aligned with pysim/waymo_sim/vehicle.py VehicleParams.
 constexpr double kEgoMaxAccelMps2 = 2.5;
 constexpr double kEgoMaxDecelMps2 = 6.0;
 constexpr double kEgoMaxSteerRad = 35.0 * M_PI / 180.0;
 constexpr double kEgoMaxSteerRateRadPerS = 180.0 * M_PI / 180.0;
 
+using Clock = std::chrono::steady_clock;
+
+double MsSince(const Clock::time_point& t0, const Clock::time_point& t1) {
+  return std::chrono::duration<double, std::milli>(t1 - t0).count();
+}
+
 struct Args {
   std::string scenario_dir;
-  /// Default: repo `output/log/sim_log.json` when cwd is `sim/` (typical `bazel run`).
   std::string output = "../output/log/sim_log.json";
   std::string source_tag = "waymo_sim_cpp";
   double dt = 0.1;
@@ -42,15 +49,19 @@ struct Args {
   double ego_max_speed = 33.3;
   std::string grading_bin;
   std::string grading_report;
-  std::string cpp_mode = "online";  // online/offline/both/off
+  std::string cpp_mode = "online";
   std::string log_dir;
   std::string log_level = "info";
   std::string metrics_config;
+  std::string scenario_load = "bulk";
+  bool benchmark = false;
 };
 
 void PrintUsage(const char* argv0) {
   std::cerr
       << "Usage: " << argv0 << " --scenario-dir <dir> [options]\n"
+      << "  --scenario-load <bulk|stream>  (default: bulk)\n"
+      << "  --benchmark  (implies --cpp-mode off, skip sim_log write)\n"
       << "  --output <path>\n"
       << "  --dt <seconds>\n"
       << "  --max-seconds <seconds>\n"
@@ -60,11 +71,10 @@ void PrintUsage(const char* argv0) {
       << "  --desired-speed <mps>\n"
       << "  --grading-bin <path-to-grading_main>\n"
       << "  --grading-report <report-path>\n"
-      << "  --metrics-config <grading_metrics.json>  (passed to grading_main)\n"
+      << "  --metrics-config <grading_metrics.json>\n"
       << "  --cpp-mode <online|offline|both|off>\n"
-      << "  --log-dir <dir>   (optional; spdlog file sim_YYYYMMDD_HHMMSS.log)\n"
-      << "  --log-level <trace|debug|info|warn|error|off>  (default: info when "
-         "--log-dir set)\n";
+      << "  --log-dir <dir>\n"
+      << "  --log-level <trace|debug|info|warn|error|off>\n";
 }
 
 bool ParseArgs(int argc, char** argv, Args* args) {
@@ -78,6 +88,10 @@ bool ParseArgs(int argc, char** argv, Args* args) {
     };
     if (k == "--scenario-dir") {
       args->scenario_dir = next("--scenario-dir");
+    } else if (k == "--scenario-load") {
+      args->scenario_load = next("--scenario-load");
+    } else if (k == "--benchmark") {
+      args->benchmark = true;
     } else if (k == "--output") {
       args->output = next("--output");
     } else if (k == "--source-tag") {
@@ -126,6 +140,12 @@ bool ParseArgs(int argc, char** argv, Args* args) {
   return !args->scenario_dir.empty();
 }
 
+hyw_sim::ScenarioLoadMode ParseLoadMode(const std::string& s) {
+  if (s == "bulk") return hyw_sim::ScenarioLoadMode::kBulk;
+  if (s == "stream") return hyw_sim::ScenarioLoadMode::kStream;
+  throw std::runtime_error("unknown --scenario-load: " + s + " (use bulk or stream)");
+}
+
 hyw_sim::proto::VehicleParams MakeVehicleParams(const Args& args) {
   hyw_sim::proto::VehicleParams params;
   params.set_length(args.ego_length);
@@ -140,9 +160,26 @@ hyw_sim::proto::VehicleParams MakeVehicleParams(const Args& args) {
   return params;
 }
 
+void PrintBenchmarkJson(const std::string& scenario_load,
+                        const std::string& scenario_dir, double load_meta_map_ms,
+                        double load_dynamic_ms, double load_frames_ms,
+                        double sim_loop_ms, double total_ms, size_t frames) {
+  std::cout << std::fixed << std::setprecision(3);
+  std::cout << "{\"scenario_load\":\"" << scenario_load << "\""
+            << ",\"scenario_dir\":\"" << hyw_sim::SimFileLogger::EscapeJsonString(scenario_dir)
+            << "\""
+            << ",\"load_meta_map_ms\":" << load_meta_map_ms
+            << ",\"load_dynamic_ms\":" << load_dynamic_ms
+            << ",\"load_frames_ms\":" << load_frames_ms
+            << ",\"sim_loop_ms\":" << sim_loop_ms
+            << ",\"total_ms\":" << total_ms
+            << ",\"frames\":" << frames << "}\n";
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
+  const auto total_t0 = Clock::now();
   Args args;
   try {
     if (!ParseArgs(argc, argv, &args)) {
@@ -155,15 +192,61 @@ int main(int argc, char** argv) {
     return 1;
   }
 
-  hyw_sim::ScenarioBundle bundle;
-  std::string err;
-  if (!hyw_sim::LoadScenarioFromDir(args.scenario_dir, &bundle, &err)) {
-    std::cerr << "[sim_cpp] failed loading scenario: " << err << "\n";
-    return 2;
+  if (args.benchmark) {
+    args.cpp_mode = "off";
+    args.log_dir.clear();
   }
 
-  const hyw_sim::proto::VehicleParams params = MakeVehicleParams(args);
+  hyw_sim::ScenarioLoadMode load_mode;
+  try {
+    load_mode = ParseLoadMode(args.scenario_load);
+  } catch (const std::exception& e) {
+    std::cerr << "[sim_cpp] " << e.what() << "\n";
+    return 1;
+  }
 
+  hyw_sim::ScenarioBundle bundle;
+  std::unique_ptr<hyw_sim::DynamicNpcSource> dynamic_source;
+  std::string err;
+
+  const auto meta_map_t0 = Clock::now();
+  if (!hyw_sim::LoadScenarioMetaAndMap(args.scenario_dir, &bundle.meta, &bundle.map,
+                                       &err)) {
+    std::cerr << "[sim_cpp] failed loading scenario meta/map: " << err << "\n";
+    return 2;
+  }
+  const auto meta_map_t1 = Clock::now();
+  const double load_meta_map_ms = MsSince(meta_map_t0, meta_map_t1);
+
+  const auto dynamic_t0 = Clock::now();
+  if (load_mode == hyw_sim::ScenarioLoadMode::kBulk) {
+    const fs::path objs_path = fs::path(args.scenario_dir) / "dynamic_objects.json";
+    if (!hyw_sim::ReadDynamicObjectsFromFile(objs_path.string(), &bundle.dynamic,
+                                             &err)) {
+      std::cerr << "[sim_cpp] failed loading dynamic_objects: " << err << "\n";
+      return 2;
+    }
+    if (bundle.dynamic.timestamps_seconds_size() == 0) {
+      std::cerr << "[sim_cpp] dynamic_objects.json missing timestamps_seconds\n";
+      return 2;
+    }
+    dynamic_source = hyw_sim::CreateBulkDynamicSource(std::move(bundle.dynamic));
+  } else {
+    dynamic_source =
+        hyw_sim::CreateStreamDynamicSource(args.scenario_dir, &err);
+    if (!dynamic_source) {
+      std::cerr << "[sim_cpp] failed loading stream dynamic: " << err << "\n";
+      return 2;
+    }
+    if (dynamic_source->timestamps().empty()) {
+      std::cerr << "[sim_cpp] stream header missing timestamps_seconds\n";
+      return 2;
+    }
+  }
+  const auto dynamic_t1 = Clock::now();
+  const double load_dynamic_ms = MsSince(dynamic_t0, dynamic_t1);
+
+  const hyw_sim::proto::VehicleParams params = MakeVehicleParams(args);
   hyw_sim::LaneGraph lane_graph(std::move(bundle.map));
 
   hyw_sim::proto::PlannerInputs planner_inputs;
@@ -181,11 +264,19 @@ int main(int argc, char** argv) {
     }
     planner_inputs.mutable_reference_points()->CopyFrom(route.reference_points());
     route_speed_mps = route.speed_limit_mps();
-    std::cout << "[sim_cpp] route: " << route.route_lane_ids_size() << " lanes, "
-              << route.reference_points_size() << " ref points, limit="
-              << (route_speed_mps * 3.6) << " km/h\n";
+    if (!args.benchmark) {
+      std::cout << "[sim_cpp] route: " << route.route_lane_ids_size() << " lanes, "
+                << route.reference_points_size() << " ref points, limit="
+                << (route_speed_mps * 3.6) << " km/h\n";
+    }
   } else if (args.reference_source == "sdc") {
-    const auto sdc_ref = hyw_sim::BuildSdcReference(bundle.dynamic);
+    hyw_sim::proto::Track sdc_track;
+    std::vector<hyw_sim::proto::ReferencePoint> sdc_ref;
+    if (load_mode == hyw_sim::ScenarioLoadMode::kBulk) {
+      sdc_ref = hyw_sim::BuildSdcReference(bundle.dynamic);
+    } else if (dynamic_source->GetSdcTrack(&sdc_track)) {
+      sdc_ref = hyw_sim::BuildSdcReferenceFromTrack(sdc_track);
+    }
     if (sdc_ref.empty()) {
       std::cerr << "[sim_cpp] fail: no SDC track for --reference-source sdc\n";
       return 2;
@@ -194,8 +285,10 @@ int main(int argc, char** argv) {
     for (const auto& rp : sdc_ref) {
       *planner_inputs.mutable_reference_points()->Add() = rp;
     }
-    std::cout << "[sim_cpp] reference: SDC track (" << sdc_ref.size()
-              << " points)\n";
+    if (!args.benchmark) {
+      std::cout << "[sim_cpp] reference: SDC track (" << sdc_ref.size()
+                << " points)\n";
+    }
   } else {
     std::cerr << "[sim_cpp] fail: unknown --reference-source "
               << args.reference_source << " (use map or sdc)\n";
@@ -218,30 +311,21 @@ int main(int argc, char** argv) {
   auto planner = hyw_sim::CreatePlanner(args.planner, planner_inputs, &err);
   if (!planner) {
     std::cerr << "[sim_cpp] failed to create planner: " << err << "\n";
-    const auto names = hyw_sim::AvailablePlannerNames();
-    std::cerr << "[sim_cpp] available planners:";
-    for (const auto& name : names) std::cerr << " " << name;
-    std::cerr << "\n";
     return 2;
   }
-  std::cout << "[sim_cpp] planner=" << planner->Name() << "\n";
+  if (!args.benchmark) {
+    std::cout << "[sim_cpp] planner=" << planner->Name()
+              << " scenario_load=" << args.scenario_load << "\n";
+  }
 
   hyw_sim::SimFileLogger sim_logger;
-  if (!args.log_dir.empty()) {
+  if (!args.benchmark && !args.log_dir.empty()) {
     const auto ll = hyw_sim::ParseSimLogLevel(args.log_level);
     if (ll != hyw_sim::SimLogLevel::kOff) {
       if (!sim_logger.Open(fs::path(args.log_dir), ll)) {
         std::cerr << "[sim_cpp] failed to open json log under --log-dir\n";
         return 7;
       }
-      std::ostringstream sj;
-      sj << "{\"scenario_dir\":\""
-         << hyw_sim::SimFileLogger::EscapeJsonString(args.scenario_dir)
-         << "\",\"planner\":\""
-         << hyw_sim::SimFileLogger::EscapeJsonString(planner->Name()) << "\"}";
-      sim_logger.Log(hyw_sim::SimLogLevel::kInfo, "run_start", sj.str());
-      sim_logger.LogProto(hyw_sim::SimLogLevel::kDebug, "planner_inputs",
-                          planner_inputs);
     }
   }
 
@@ -250,14 +334,16 @@ int main(int argc, char** argv) {
   cfg.set_max_seconds(args.max_seconds);
   cfg.set_initial_ego_speed_mps(initial_ego_speed_mps);
 
-  hyw_sim::WorldSimulator world(bundle.meta, bundle.dynamic, lane_graph, params);
+  hyw_sim::WorldSimulator world(bundle.meta, std::move(dynamic_source), lane_graph,
+                                params);
 
   hyw_sim::StreamPipeWriter stream_writer;
   const bool enable_online =
-      !args.grading_bin.empty() &&
+      !args.benchmark && !args.grading_bin.empty() &&
       (args.cpp_mode == "online" || args.cpp_mode == "both");
+
   std::string report_path = args.grading_report;
-  if (report_path.empty()) {
+  if (!args.benchmark && report_path.empty()) {
     const fs::path outp(args.output);
     const fs::path log_dir = outp.parent_path();
     if (log_dir.filename() == "log") {
@@ -267,9 +353,9 @@ int main(int argc, char** argv) {
       report_path = (outp.parent_path() / "grading_report.json").string();
     }
   }
-  std::error_code mk_ec;
-  fs::create_directories(fs::path(report_path).parent_path(), mk_ec);
   if (enable_online) {
+    std::error_code mk_ec;
+    fs::create_directories(fs::path(report_path).parent_path(), mk_ec);
     if (!stream_writer.Start(args.grading_bin, report_path, args.metrics_config,
                              &lane_graph.map(), params, &err)) {
       std::cerr << "[sim_cpp] failed to start grading stream: " << err << "\n";
@@ -278,18 +364,6 @@ int main(int argc, char** argv) {
   }
 
   hyw_sim::WorldStepHooks step_hooks;
-  step_hooks.on_observation = [&](const hyw_sim::proto::PlannerObservation& obs) {
-    if (sim_logger.IsOpen()) {
-      sim_logger.LogProto(hyw_sim::SimLogLevel::kDebug, "planner_observation", obs);
-    }
-  };
-  step_hooks.on_plan = [&](const hyw_sim::proto::PlanCommand& cmd,
-                           const hyw_sim::proto::PlannerTrajectory& trajectory) {
-    (void)trajectory;
-    if (sim_logger.IsOpen()) {
-      sim_logger.LogProto(hyw_sim::SimLogLevel::kDebug, "plan_command", cmd);
-    }
-  };
   step_hooks.on_frame = [&](const hyw_sim::proto::FrameRecord& fr) {
     if (enable_online) {
       stream_writer.EnqueueFrame(fr);
@@ -300,11 +374,26 @@ int main(int argc, char** argv) {
   };
 
   const hyw_sim::WorldStepHooks* hooks_ptr = nullptr;
-  if (sim_logger.IsOpen() || enable_online) {
+  if (enable_online || sim_logger.IsOpen()) {
     hooks_ptr = &step_hooks;
   }
 
+  const auto sim_t0 = Clock::now();
   const auto records = world.Run(*planner, cfg, hooks_ptr);
+  const auto sim_t1 = Clock::now();
+
+  const double sim_loop_ms = MsSince(sim_t0, sim_t1);
+  const double load_frames_ms =
+      static_cast<double>(world.stream_io_us()) / 1000.0;
+  const double total_ms = MsSince(total_t0, Clock::now());
+
+  if (args.benchmark) {
+    PrintBenchmarkJson(args.scenario_load, args.scenario_dir, load_meta_map_ms,
+                       load_dynamic_ms, load_frames_ms, sim_loop_ms, total_ms,
+                       records.size());
+    return 0;
+  }
+
   if (enable_online) {
     if (!stream_writer.Finish(&err)) {
       std::cerr << "[sim_cpp] grading stream finish failed: " << err << "\n";
@@ -312,13 +401,6 @@ int main(int argc, char** argv) {
     }
   }
   stream_writer.Close();
-
-  if (sim_logger.IsOpen()) {
-    std::ostringstream se;
-    se << "{\"frames\":" << records.size() << ",\"output\":\""
-       << hyw_sim::SimFileLogger::EscapeJsonString(args.output) << "\"}";
-    sim_logger.Log(hyw_sim::SimLogLevel::kInfo, "simulation_done", se.str());
-  }
 
   if (!hyw_sim::WriteSimLogJson(args.output, args.source_tag, records, lane_graph.map(),
                                 params, &err)) {
@@ -328,10 +410,14 @@ int main(int argc, char** argv) {
   std::cout << "[sim_cpp] wrote " << args.output << " (" << records.size()
             << " frames)\n";
 
+  PrintBenchmarkJson(args.scenario_load, args.scenario_dir, load_meta_map_ms,
+                     load_dynamic_ms, load_frames_ms, sim_loop_ms, total_ms,
+                     records.size());
+
   if (!args.grading_bin.empty() &&
       (args.cpp_mode == "offline" || args.cpp_mode == "both")) {
     if (!hyw_sim::RunBatchGrading(args.grading_bin, args.output, report_path,
-                                args.metrics_config, &err)) {
+                                  args.metrics_config, &err)) {
       std::cerr << "[sim_cpp] offline grading failed: " << err << "\n";
       return 6;
     }

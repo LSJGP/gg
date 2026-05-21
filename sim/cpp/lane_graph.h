@@ -46,4 +46,7 @@ bool BuildMapReference(const proto::ScenarioMeta& meta, const LaneGraph& graph,
 std::vector<proto::ReferencePoint> BuildSdcReference(
     const proto::DynamicObjects& dynamic);
 
+std::vector<proto::ReferencePoint> BuildSdcReferenceFromTrack(
+    const proto::Track& sdc_track);
+
 }  // namespace hyw_sim

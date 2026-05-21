@@ -26,6 +26,17 @@ def _parse_args(argv) -> argparse.Namespace:
         )
     )
     p.add_argument("--scenario-dir", required=True)
+    p.add_argument(
+        "--scenario-load",
+        choices=("bulk", "stream"),
+        default="bulk",
+        help="bulk: read dynamic_objects.json once; stream: per-frame files under dynamic_objects/",
+    )
+    p.add_argument(
+        "--benchmark",
+        action="store_true",
+        help="Benchmark mode: --cpp-mode off, skip sim_log, print timing JSON",
+    )
     p.add_argument("--planner", default="local_dwa")
     p.add_argument(
         "--reference-source",
@@ -120,7 +131,11 @@ def main(argv=None) -> int:
         args.reference_source,
         "--reference-step",
         str(args.reference_step),
+        "--scenario-load",
+        args.scenario_load,
     ]
+    if args.benchmark:
+        cmd.append("--benchmark")
     if args.stop_on_collision:
         cmd.append("--stop-on-collision")
     if args.grading_bin:

@@ -27,10 +27,23 @@ cc_library(
 )
 
 cc_library(
+    name = "dynamic_source",
+    srcs = ["dynamic_source.cc"],
+    hdrs = ["dynamic_source.h"],
+    deps = [
+        ":json_utils",
+        ":proto_io",
+        "//proto/sim:runtime_cc_proto",
+        "//proto/sim:scenario_cc_proto",
+    ],
+)
+
+cc_library(
     name = "scenario_loader",
     srcs = ["scenario_loader.cc"],
     hdrs = ["scenario_loader.h"],
     deps = [
+        ":dynamic_source",
         ":proto_io",
         "//proto/sim:map_cc_proto",
         "//proto/sim:scenario_cc_proto",
@@ -90,6 +103,7 @@ cc_library(
     srcs = ["world.cc"],
     hdrs = ["world.h"],
     deps = [
+        ":dynamic_source",
         ":lane_graph",
         ":map_query",
         ":planner",

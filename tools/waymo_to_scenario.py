@@ -488,6 +488,11 @@ def main() -> int:
         help="保留 Waymo 原始全局坐标（默认是把 SDC 起点平移到原点）",
     )
     p.set_defaults(center_on_sdc=True)
+    p.add_argument(
+        "--split-dynamic-frames",
+        action="store_true",
+        help="Also write dynamic_objects/header.json + frames/ for stream loading",
+    )
     args = p.parse_args()
 
     try:
@@ -543,6 +548,15 @@ def main() -> int:
 
     write_meta(scene, meta_path, source=str(tf_path), scenario_index=args.scenario_index)
     write_dynamic_objects(scene, objs_path, source=str(tf_path))
+    if args.split_dynamic_frames:
+        import importlib.util
+
+        _split_path = Path(__file__).resolve().parent / "split_existing_dynamic_objects.py"
+        _spec = importlib.util.spec_from_file_location("split_dynamic", _split_path)
+        _mod = importlib.util.module_from_spec(_spec)
+        assert _spec.loader is not None
+        _spec.loader.exec_module(_mod)
+        _mod.split_dynamic_objects(out_dir)
     write_lane_graph(scene, graph_path, source=str(tf_path))
 
     mc = scene.map_feature_counts

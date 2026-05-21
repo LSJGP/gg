@@ -295,28 +295,20 @@ bool BuildMapReference(const proto::ScenarioMeta& meta, const LaneGraph& graph,
   return true;
 }
 
-std::vector<proto::ReferencePoint> BuildSdcReference(
-    const proto::DynamicObjects& dynamic) {
+std::vector<proto::ReferencePoint> BuildSdcReferenceFromTrack(
+    const proto::Track& sdc_track) {
   std::vector<proto::ReferencePoint> reference_points;
-  const proto::Track* sdc_track = nullptr;
-  for (const auto& tr : dynamic.tracks()) {
-    if (tr.is_sdc() || (dynamic.sdc_track_index() >= 0 &&
-                        tr.track_index() == dynamic.sdc_track_index())) {
-      sdc_track = &tr;
-      break;
-    }
-  }
-  if (sdc_track == nullptr || sdc_track->states_size() == 0) {
+  if (sdc_track.states_size() == 0) {
     return reference_points;
   }
 
-  const int max_steps = sdc_track->states_size();
+  const int max_steps = sdc_track.states_size();
   reference_points.resize(static_cast<size_t>(max_steps));
   proto::ReferencePoint last_valid;
   bool has_last_valid = false;
   for (int i = 0; i < max_steps; ++i) {
-    if (sdc_track->states(i).valid()) {
-      const auto& st = sdc_track->states(i);
+    if (sdc_track.states(i).valid()) {
+      const auto& st = sdc_track.states(i);
       proto::ReferencePoint rp;
       rp.set_x(st.x());
       rp.set_y(st.y());
@@ -331,6 +323,22 @@ std::vector<proto::ReferencePoint> BuildSdcReference(
     }
   }
   return reference_points;
+}
+
+std::vector<proto::ReferencePoint> BuildSdcReference(
+    const proto::DynamicObjects& dynamic) {
+  const proto::Track* sdc_track = nullptr;
+  for (const auto& tr : dynamic.tracks()) {
+    if (tr.is_sdc() || (dynamic.sdc_track_index() >= 0 &&
+                        tr.track_index() == dynamic.sdc_track_index())) {
+      sdc_track = &tr;
+      break;
+    }
+  }
+  if (sdc_track == nullptr) {
+    return {};
+  }
+  return BuildSdcReferenceFromTrack(*sdc_track);
 }
 
 }  // namespace hyw_sim
