@@ -6,3 +6,8 @@ message LaneDepartureCheckerConfig {
   double min_road_edge_clearance_m = 1;
   double min_lane_boundary_clearance_m = 2;
 }
+
+message DrivableAreaCheckerConfig {
+  double min_clearance_m = 1;
+  bool check_center_only = 2;
+}

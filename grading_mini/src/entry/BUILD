@@ -12,6 +12,7 @@ cc_binary(
         "//src/grading:grader",
         "//src/grading/metrics/example:planning_limit_checker",
         "//src/grading/metrics/example:speed_checker",
+        "//src/grading/metrics/safety:drivable_area_checker",
         "//src/grading/metrics/safety:lane_departure_checker",
         "//src/grading/metrics/safety:regulatory_collision_checker",
         "//src/planning:simple_planner",
