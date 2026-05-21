@@ -45,6 +45,9 @@ METRIC_CATALOG: Dict[str, Dict[str, Any]] = {
     "lane_departure_checker": {
         "paramsJson": '{"minRoadEdgeClearanceM": 0.35, "minLaneBoundaryClearanceM": 0.0}',
     },
+    "drivable_area_checker": {
+        "paramsJson": '{"minClearanceM": 0.35, "checkCenterOnly": false}',
+    },
 }
 
 

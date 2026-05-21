@@ -5,6 +5,7 @@
 #include <string>
 #include <string_view>
 
+#include "google/protobuf/message.h"
 #include "proto/sim/runtime.pb.h"
 
 namespace spdlog {
@@ -29,7 +30,8 @@ class SimFileLogger {
   void Log(SimLogLevel level, std::string_view message,
            std::string_view json_data_object = "{}");
 
-  void LogFrame(SimLogLevel level, const proto::FrameRecord& frame);
+  void LogProto(SimLogLevel level, std::string_view tag,
+                const google::protobuf::Message& msg);
 
   bool IsOpen() const { return open_; }
 

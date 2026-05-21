@@ -2,6 +2,9 @@
 
 #include <array>
 
+#include "proto/grading/metric_input.pb.h"
+#include "proto/grading/scene.pb.h"
+
 namespace grading_mini {
 
 struct Obb2D {
@@ -13,9 +16,12 @@ struct Obb2D {
 };
 
 std::array<std::array<double, 2>, 4> ObbCorners(const Obb2D& box);
-bool ObbOverlap(const Obb2D& a, const Obb2D& b);
+
+Obb2D MakeEgoObb(const proto::MetricFrameInput& input);
 
 double PointToSegmentDist(double px, double py, double x1, double y1, double x2,
                           double y2);
+
+double MinDistToRoadEdges(const proto::SceneMap& map, double x, double y);
 
 }  // namespace grading_mini

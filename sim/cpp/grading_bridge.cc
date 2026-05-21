@@ -26,9 +26,11 @@ std::string ShellSingleQuote(const std::string& p) {
   return out;
 }
 
-std::string FrameToJsonLine(const proto::FrameRecord& frame,
-                            const proto::StaticMap* scene_map,
-                            const proto::VehicleParams& ego_params) {
+}  // namespace
+
+std::string FrameToGradingJsonLine(const proto::FrameRecord& frame,
+                                   const proto::StaticMap* scene_map,
+                                   const proto::VehicleParams& ego_params) {
   const proto::StaticMap* map_ptr =
       (frame.frame_id() == 0) ? scene_map : nullptr;
   const auto input = ToMetricFrameInput(frame, map_ptr, ego_params);
@@ -41,8 +43,6 @@ std::string FrameToJsonLine(const proto::FrameRecord& frame,
   }
   return json;
 }
-
-}  // namespace
 
 StreamPipeWriter::~StreamPipeWriter() { Close(); }
 
@@ -66,7 +66,7 @@ void StreamPipeWriter::WriterLoop() {
       write_failed_ = true;
       break;
     }
-    const std::string line = FrameToJsonLine(frame, scene_map_, ego_params_);
+    const std::string line = FrameToGradingJsonLine(frame, scene_map_, ego_params_);
     if (std::fputs((line + "\n").c_str(), pipe_) < 0) {
       write_failed_ = true;
       break;

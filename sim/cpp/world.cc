@@ -39,9 +39,9 @@ WorldSimulator::WorldSimulator(const proto::ScenarioMeta& meta,
       lane_graph_(lane_graph),
       params_(std::move(params)) {}
 
-std::vector<proto::FrameRecord> WorldSimulator::Run(
-    const Planner& planner, const proto::WorldConfig& cfg,
-    const std::function<void(const proto::FrameRecord&)>* on_frame) {
+std::vector<proto::FrameRecord> WorldSimulator::Run(const Planner& planner,
+                                                    const proto::WorldConfig& cfg,
+                                                    const WorldStepHooks* hooks) {
   std::vector<proto::FrameRecord> out;
   if (dynamic_.timestamps_seconds_size() == 0) return out;
 
@@ -78,8 +78,15 @@ std::vector<proto::FrameRecord> WorldSimulator::Run(
     }
     *obs.mutable_road() = road;
 
+    if (hooks && hooks->on_observation) {
+      hooks->on_observation(obs);
+    }
+
     const proto::PlannerTrajectory trajectory = planner.Plan(obs);
     const proto::PlanCommand cmd = TrajectoryToCommand(trajectory, cfg.dt());
+    if (hooks && hooks->on_plan) {
+      hooks->on_plan(cmd, trajectory);
+    }
     StepVehicle(&ego, cmd, cfg.dt(), params_);
 
     proto::FrameRecord r;
@@ -94,8 +101,8 @@ std::vector<proto::FrameRecord> WorldSimulator::Run(
     *r.mutable_road() = road;
     *r.mutable_planned_trajectory() = trajectory;
     out.push_back(r);
-    if (on_frame && *on_frame) {
-      (*on_frame)(r);
+    if (hooks && hooks->on_frame) {
+      hooks->on_frame(r);
     }
   }
   return out;

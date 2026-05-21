@@ -10,14 +10,21 @@
 
 namespace hyw_sim {
 
+struct WorldStepHooks {
+  std::function<void(const proto::PlannerObservation&)> on_observation;
+  std::function<void(const proto::PlanCommand&, const proto::PlannerTrajectory&)>
+      on_plan;
+  std::function<void(const proto::FrameRecord&)> on_frame;
+};
+
 class WorldSimulator {
  public:
   WorldSimulator(const proto::ScenarioMeta& meta, const proto::DynamicObjects& dynamic,
                  const LaneGraph& lane_graph, proto::VehicleParams params);
 
-  std::vector<proto::FrameRecord> Run(
-      const Planner& planner, const proto::WorldConfig& cfg,
-      const std::function<void(const proto::FrameRecord&)>* on_frame = nullptr);
+  std::vector<proto::FrameRecord> Run(const Planner& planner,
+                                      const proto::WorldConfig& cfg,
+                                      const WorldStepHooks* hooks = nullptr);
 
  private:
   std::vector<proto::NpcSnapshot> NPCsAtTime(double t) const;

@@ -240,6 +240,8 @@ int main(int argc, char** argv) {
          << "\",\"planner\":\""
          << hyw_sim::SimFileLogger::EscapeJsonString(planner->Name()) << "\"}";
       sim_logger.Log(hyw_sim::SimLogLevel::kInfo, "run_start", sj.str());
+      sim_logger.LogProto(hyw_sim::SimLogLevel::kDebug, "planner_inputs",
+                          planner_inputs);
     }
   }
 
@@ -275,12 +277,34 @@ int main(int argc, char** argv) {
     }
   }
 
-  const std::function<void(const hyw_sim::proto::FrameRecord&)> stream_hook =
-      [&](const hyw_sim::proto::FrameRecord& fr) { stream_writer.EnqueueFrame(fr); };
+  hyw_sim::WorldStepHooks step_hooks;
+  step_hooks.on_observation = [&](const hyw_sim::proto::PlannerObservation& obs) {
+    if (sim_logger.IsOpen()) {
+      sim_logger.LogProto(hyw_sim::SimLogLevel::kDebug, "planner_observation", obs);
+    }
+  };
+  step_hooks.on_plan = [&](const hyw_sim::proto::PlanCommand& cmd,
+                           const hyw_sim::proto::PlannerTrajectory& trajectory) {
+    (void)trajectory;
+    if (sim_logger.IsOpen()) {
+      sim_logger.LogProto(hyw_sim::SimLogLevel::kDebug, "plan_command", cmd);
+    }
+  };
+  step_hooks.on_frame = [&](const hyw_sim::proto::FrameRecord& fr) {
+    if (enable_online) {
+      stream_writer.EnqueueFrame(fr);
+    }
+    if (sim_logger.IsOpen()) {
+      sim_logger.LogProto(hyw_sim::SimLogLevel::kDebug, "frame_record", fr);
+    }
+  };
 
-  const auto records = world.Run(
-      *planner, cfg,
-      enable_online ? &stream_hook : nullptr);
+  const hyw_sim::WorldStepHooks* hooks_ptr = nullptr;
+  if (sim_logger.IsOpen() || enable_online) {
+    hooks_ptr = &step_hooks;
+  }
+
+  const auto records = world.Run(*planner, cfg, hooks_ptr);
   if (enable_online) {
     if (!stream_writer.Finish(&err)) {
       std::cerr << "[sim_cpp] grading stream finish failed: " << err << "\n";
@@ -290,9 +314,6 @@ int main(int argc, char** argv) {
   stream_writer.Close();
 
   if (sim_logger.IsOpen()) {
-    for (const auto& fr : records) {
-      sim_logger.LogFrame(hyw_sim::SimLogLevel::kDebug, fr);
-    }
     std::ostringstream se;
     se << "{\"frames\":" << records.size() << ",\"output\":\""
        << hyw_sim::SimFileLogger::EscapeJsonString(args.output) << "\"}";
