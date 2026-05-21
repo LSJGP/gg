@@ -77,6 +77,79 @@ bool RefTangent(const std::vector<proto::ReferencePoint> &ref, int i,
   return true;
 }
 
+int ClosestValidRefIndexFrom(const std::vector<proto::ReferencePoint> &ref,
+                             double x, double y, int min_index) {
+  int best = -1;
+  double best_d = 1e300;
+  const int start = std::max(0, min_index);
+  for (int i = start; i < static_cast<int>(ref.size()); ++i) {
+    if (!ref[i].valid())
+      continue;
+    const double d = std::hypot(ref[i].x() - x, ref[i].y() - y);
+    if (d < best_d) {
+      best_d = d;
+      best = i;
+    }
+  }
+  return best;
+}
+
+double RefPathLateralError(const std::vector<proto::ReferencePoint> &ref,
+                           double x, double y, int center_idx) {
+  if (ref.empty())
+    return 0.0;
+  const int n = static_cast<int>(ref.size());
+  const int i0 = std::max(0, center_idx - 8);
+  const int i1 = std::min(n - 1, center_idx + 24);
+  double best = 1e300;
+  for (int i = i0; i <= i1; ++i) {
+    if (!ref[i].valid())
+      continue;
+    best = std::min(best, std::hypot(ref[i].x() - x, ref[i].y() - y));
+    if (i + 1 <= i1 && ref[i + 1].valid()) {
+      const double ax = ref[i].x();
+      const double ay = ref[i].y();
+      const double bx = ref[i + 1].x();
+      const double by = ref[i + 1].y();
+      const double dx = bx - ax;
+      const double dy = by - ay;
+      const double len2 = dx * dx + dy * dy;
+      if (len2 > 1e-6) {
+        const double t = std::clamp(((x - ax) * dx + (y - ay) * dy) / len2, 0.0,
+                                    1.0);
+        best = std::min(best, std::hypot(x - (ax + t * dx), y - (ay + t * dy)));
+      }
+    }
+  }
+  return std::isfinite(best) ? best : 0.0;
+}
+
+double LaneOffsetPenalty(double lateral_offset_m) {
+  const double a = std::fabs(lateral_offset_m);
+  if (a < 0.25)
+    return 0.0;
+  const double excess = a - 0.25;
+  return excess * excess * 4.0;
+}
+
+double LaneBoundaryPenalty(double dist_to_left_boundary_m,
+                         double dist_to_right_boundary_m) {
+  double penalty = 0.0;
+  if (dist_to_left_boundary_m < 0.6) {
+    const double e = 0.6 - dist_to_left_boundary_m;
+    penalty += e * e * 8.0;
+  }
+  if (dist_to_right_boundary_m < 0.6) {
+    const double e = 0.6 - dist_to_right_boundary_m;
+    penalty += e * e * 8.0;
+  }
+  if (dist_to_left_boundary_m < 0.0)
+    penalty += 50.0;
+  if (dist_to_right_boundary_m < 0.0)
+    penalty += 50.0;
+  return penalty;
+}
+
 void SimulateOneStep(proto::VehicleState &ego, double cmd_accel,
                      double cmd_steer, double step_dt,
                      const proto::VehicleParams &p) {
@@ -352,8 +425,9 @@ public:
 
   proto::PlannerTrajectory
   Plan(const proto::PlannerObservation &obs) const override {
-    const auto cmd = PlanStep(obs.ego(), {obs.npcs().begin(), obs.npcs().end()},
-                              obs.frame_id());
+    const auto cmd =
+        PlanStep(obs.ego(), {obs.npcs().begin(), obs.npcs().end()},
+                 obs.frame_id(), obs.road());
     return BuildTrajectoryFromCommand(cmd, obs.ego(), p_, traj_cfg_);
   }
 
@@ -364,10 +438,12 @@ private:
 
   proto::PlanCommand PlanStep(const proto::VehicleState &ego,
                               const std::vector<proto::NpcSnapshot> &npcs,
-                              int frame_id) const;
+                              int frame_id,
+                              const proto::RoadContext &road) const;
   proto::PlanCommand FallbackPurePursuit(const proto::VehicleState &ego,
                                          double target_x, double target_y,
-                                         double target_speed) const;
+                                         double target_speed,
+                                         const proto::RoadContext &road) const;
 
   proto::Pose2D goal_;
   double desired_speed_mps_ = 13.9;
@@ -379,7 +455,8 @@ private:
 proto::PlanCommand
 LocalDwaPlanner::FallbackPurePursuit(const proto::VehicleState &ego,
                                      double target_x, double target_y,
-                                     double target_speed) const {
+                                     double target_speed,
+                                     const proto::RoadContext &road) const {
   proto::PlanCommand cmd;
   
   // 1. 计算自车到【最终终点】(goal_) 的相对状态，用于判断是否该彻底停车
@@ -426,16 +503,20 @@ LocalDwaPlanner::FallbackPurePursuit(const proto::VehicleState &ego,
       std::atan2(std::sin(desired_heading - ego.heading()),
                  std::cos(desired_heading - ego.heading()));
                  
-  // P 控制器输出方向盘转角
-  cmd.set_steering_angle(0.85 * heading_error);
-  
+  double steer = 0.85 * heading_error;
+  if (road.closest_lane_id() != 0) {
+    steer -= 0.4 * road.lateral_offset_m();
+    steer = std::clamp(steer, -p_.max_steer(), p_.max_steer());
+  }
+  cmd.set_steering_angle(steer);
+
   return cmd;
 }
 
 proto::PlanCommand
 LocalDwaPlanner::PlanStep(const proto::VehicleState &ego,
                           const std::vector<proto::NpcSnapshot> &npcs,
-                          int frame_id) const {
+                          int frame_id, const proto::RoadContext &road) const {
   constexpr int kSteerSamples = 13;
   constexpr int kAccelSamples = 7;
   constexpr double kGoalDeadzone = 1.5;
@@ -456,12 +537,20 @@ LocalDwaPlanner::PlanStep(const proto::VehicleState &ego,
     return stop_cmd;
   }
 
-  int ref_idx = ClosestValidRefIndex(reference_points_, ego.x(), ego.y());
+  const int min_ref_idx = std::max(0, frame_id - 3);
+  int ref_idx =
+      ClosestValidRefIndexFrom(reference_points_, ego.x(), ego.y(), min_ref_idx);
+  if (ref_idx < 0) {
+    ref_idx = ClosestValidRefIndex(reference_points_, ego.x(), ego.y());
+  }
   if (ref_idx < 0 && !reference_points_.empty()) {
     const int idx = std::max(
         0, std::min(frame_id, static_cast<int>(reference_points_.size() - 1)));
     if (reference_points_[idx].valid())
       ref_idx = idx;
+  }
+  if (ref_idx >= 0 && ref_idx < min_ref_idx) {
+    ref_idx = min_ref_idx;
   }
 
   double target_speed = desired_speed_mps_;
@@ -540,7 +629,20 @@ LocalDwaPlanner::PlanStep(const proto::VehicleState &ego,
       const double prog = (roll.x() - ego.x()) * tx + (roll.y() - ego.y()) * ty;
       const double lat_err =
           std::fabs(-ty * (roll.x() - ego.x()) + tx * (roll.y() - ego.y()));
-      const double cost_track = 0.12 * lat_err - 1.0 * prog +
+      const double ref_lat =
+          RefPathLateralError(reference_points_, roll.x(), roll.y(), ref_idx);
+      double lane_cost = 0.55 * lat_err + 1.1 * ref_lat;
+      if (road.closest_lane_id() != 0) {
+        const double dlat_path =
+            -ty * (roll.x() - ego.x()) + tx * (roll.y() - ego.y());
+        const double pred_lat = road.lateral_offset_m() + dlat_path;
+        lane_cost += 2.0 * LaneOffsetPenalty(pred_lat);
+        const double pred_left_b = road.dist_to_left_boundary_m() - dlat_path;
+        const double pred_right_b = road.dist_to_right_boundary_m() + dlat_path;
+        lane_cost +=
+            LaneBoundaryPenalty(pred_left_b, pred_right_b);
+      }
+      const double cost_track = lane_cost - 0.85 * prog +
                                 0.35 * std::fabs(steer_cmd) +
                                 0.04 * std::fabs(accel);
 
@@ -569,7 +671,7 @@ LocalDwaPlanner::PlanStep(const proto::VehicleState &ego,
   // ... (保留 DWA 采样循环逻辑) ...
 
   if (!found_free) {
-    return FallbackPurePursuit(ego, target_x, target_y, target_speed);
+    return FallbackPurePursuit(ego, target_x, target_y, target_speed, road);
   }
 
   proto::PlanCommand cmd;
@@ -594,7 +696,13 @@ LocalDwaPlanner::PlanStep(const proto::VehicleState &ego,
     cmd.set_desired_speed_mps(target_speed);
   }
 
-  cmd.set_steering_angle(best_steer);
+  double steer = best_steer;
+  if (road.closest_lane_id() != 0 &&
+      std::fabs(road.lateral_offset_m()) > 0.35) {
+    steer -= 0.25 * road.lateral_offset_m();
+    steer = std::clamp(steer, -p_.max_steer(), p_.max_steer());
+  }
+  cmd.set_steering_angle(steer);
   return cmd;
 }
 
